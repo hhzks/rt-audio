@@ -33,7 +33,8 @@ public:
     }
 
     std::size_t push(const float* src, std::size_t count) noexcept {
-        const std::size_t n = count < writeAvailable() ? count : writeAvailable();
+        const std::size_t avail = writeAvailable();
+        const std::size_t n = count < avail ? count : avail;
         auto w = writeIdx_.load(std::memory_order_relaxed);
         for (std::size_t i = 0; i < n; ++i)
             data_[(w + i) & mask_] = src[i];
@@ -72,8 +73,10 @@ public:
     // Drop the oldest `count` samples. Used by the drift compensator when the
     // buffer creeps toward full.
     void discard(std::size_t count) noexcept {
-        const std::size_t n = count < readAvailable() ? count : readAvailable();
-        readIdx_.fetch_add(n, std::memory_order_release);
+        const std::size_t avail = readAvailable();
+        const std::size_t n = count < avail ? count : avail;
+        const auto r = readIdx_.load(std::memory_order_relaxed);
+        readIdx_.store(r + n, std::memory_order_release);
     }
 
 private:
@@ -85,7 +88,7 @@ private:
 
     alignas(kCacheLine) std::atomic<std::size_t> writeIdx_{0};
     alignas(kCacheLine) std::atomic<std::size_t> readIdx_{0};
-    char pad_[kCacheLine]{};   // keep the two indices off each other's cache line
+    [[maybe_unused]] char pad_[kCacheLine]{};   // keep the two indices off each other's cache line
 };
 
 } // namespace rt

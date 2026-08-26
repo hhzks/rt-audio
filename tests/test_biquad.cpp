@@ -1,6 +1,7 @@
 #include "dsp/Biquad.h"
 #include "TestHarness.h"
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 using namespace rt;
@@ -16,7 +17,7 @@ double magnitudeAt(Biquad& filter, double freqHz, double sampleRate) {
     float* ch[1] = { buf.data() };
 
     double phase = 0.0;
-    const double inc = 2.0 * M_PI * freqHz / sampleRate;
+    const double inc = 2.0 * std::numbers::pi * freqHz / sampleRate;
     double peak = 0.0;
 
     for (int block = 0; block < (warmup + measure) / 256; ++block) {

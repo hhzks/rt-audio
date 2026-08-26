@@ -1,9 +1,4 @@
 // Runs the exact same AudioEngine the live app uses, but driven from a file.
-//
-// This is how you should develop DSP: no hardware, no dropouts, deterministic
-// output you can diff against a reference render. If a change alters the sound
-// unexpectedly, you find out in a unit test rather than in your headphones
-// three weeks later.
 
 #include "engine/AudioEngine.h"
 #include "dsp/Biquad.h"
@@ -16,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -66,7 +62,7 @@ WavData makeTestSignal(double seconds, double sampleRate, int channels) {
 
     for (std::size_t i = 0; i < frames; ++i) {
         const double t     = static_cast<double>(i) / sampleRate;
-        const double phase = 2.0 * M_PI * f0 * (std::exp(k * t) - 1.0) / k;
+        const double phase = 2.0 * std::numbers::pi * f0 * (std::exp(k * t) - 1.0) / k;
         rng = rng * 1664525u + 1013904223u;
         const double noise = 0.004 * ((rng >> 8) / 8388608.0 - 1.0);
         const auto   s     = static_cast<float>(0.5 * std::sin(phase) + noise);
