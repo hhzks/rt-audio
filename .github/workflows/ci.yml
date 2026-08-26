@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux / GCC 14 (C++26)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # GCC 14 is the first release CMake maps to -std=c++26.
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 ninja-build
+
+      - name: Toolchain versions
+        run: |
+          cmake --version
+          g++-14 --version
+
+      - name: Configure
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: cmake --preset linux
+
+      - name: Build
+        run: cmake --build --preset linux
+
+      - name: Test
+        run: ctest --test-dir build/linux --output-on-failure
+
+      - name: Layering guard
+        run: cmake --build build/linux --target check_layering
+
+  windows:
+    name: Windows / clang-cl (C++26)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      # MSVC cannot build this project; clang-cl is required. The runner image
+      # ships LLVM at C:\Program Files\LLVM.
+      - name: Add LLVM to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8
+
+      - name: Toolchain versions
+        run: |
+          cmake --version
+          clang-cl --version
+
+      - name: Configure
+        run: cmake --preset windows-clang-cl
+
+      - name: Build
+        run: cmake --build --preset windows-clang-cl
+
+      - name: Test
+        run: ctest --test-dir build/windows-clang --output-on-failure
+
+      - name: Layering guard
+        run: cmake --build build/windows-clang --target check_layering
