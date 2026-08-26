@@ -2,7 +2,20 @@
   "version": 3,
   "configurePresets": [
     {
+      "name": "windows-clang-cl",
+      "displayName": "Windows / clang-cl (C++26)",
+      "description": "LLVM clang-cl with the MSVC ABI. The only Windows toolchain that can build C++26.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
       "name": "windows-msvc",
+      "displayName": "Windows / MSVC (UNSUPPORTED)",
+      "description": "Kept only so the C++26 diagnostic is discoverable. MSVC has no /std:c++26 and will fail to configure.",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows",
@@ -10,12 +23,14 @@
     },
     {
       "name": "linux",
+      "displayName": "Linux / GCC 14+ or Clang 17+ (C++26)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/linux",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
     }
   ],
   "buildPresets": [
+    { "name": "windows-clang-cl", "configurePreset": "windows-clang-cl" },
     { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "RelWithDebInfo" },
     { "name": "linux", "configurePreset": "linux" }
   ]

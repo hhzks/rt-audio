@@ -1,27 +1,43 @@
 # rt-audio
 
-Low-latency realtime audio passthrough with an effects chain. Windows (WASAPI) primary,
+Low-latency realtime audio passthrough with an effects chain in C++26. Windows (WASAPI) primary,
 with a portable core designed so that adding ALSA/JACK is a contained change.
+
+## Requirements
+
+- CMake >= 3.25
+- **Windows:** LLVM/clang-cl >= 17 (`winget install LLVM.LLVM`), plus Visual Studio or Build Tools
+  for the MSVC STL and Windows SDK. MSVC's `cl.exe` *cannot* build this project: there is no
+  `/std:c++26` flag in any MSVC release, and updating Visual Studio does not change that. clang-cl
+  keeps the MSVC ABI, so linking is unaffected.
+- **Linux:** GCC >= 14 or Clang >= 17.
 
 ## Build
 
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-```
-
 Windows:
 ```
-cmake --preset windows-msvc
-cmake --build --preset windows-msvc
+cmake --preset windows-clang-cl
+cmake --build --preset windows-clang-cl
+ctest --test-dir build/windows-clang --output-on-failure
 ```
+
+Linux:
+```bash
+cmake --preset linux
+cmake --build --preset linux
+ctest --test-dir build/linux --output-on-failure
+```
+
+A `windows-msvc` preset exists only so the C++26 diagnostic is discoverable; it fails to configure
+by design.
 
 ## Run
 
+Paths below use the Windows build directory; on Linux substitute `build/linux`.
+
 ```bash
-build/src/app/rt_audio --list
-build/src/app/rt_audio --backend null --block 128 --drive 5 --mix 0.7
-build/tools/offline_render/offline_render --out sweep.wav --seconds 5 --drive 6 --mix 0.9
-cmake --build build --target check_layering
+build/windows-clang/src/app/rt_audio --list
+build/windows-clang/src/app/rt_audio --backend null --block 128 --drive 5 --mix 0.7
+build/windows-clang/tools/offline_render/offline_render --out sweep.wav --seconds 5 --drive 6 --mix 0.9
+cmake --build build/windows-clang --target check_layering
 ```
