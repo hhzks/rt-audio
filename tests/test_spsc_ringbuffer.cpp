@@ -59,6 +59,33 @@ void testPopOrZeroSignalsUnderrun() {
     CHECK_NEAR(out[3], 0.0, 1e-9);
 }
 
+void testDiscard() {
+    SpscRingBuffer ring;
+    ring.reset(16);
+
+    // Dropping from an empty ring is a no-op, not an underflow of readIdx_.
+    ring.discard(4);
+    CHECK(ring.readAvailable() == 0);
+
+    const float in[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    CHECK(ring.push(in, 8) == 8);
+
+    // Drop the three oldest; whatever remains must still be in order.
+    ring.discard(3);
+    CHECK(ring.readAvailable() == 5);
+
+    float out[5] = {};
+    CHECK(ring.pop(out, 5) == 5);
+    for (int i = 0; i < 5; ++i) CHECK_NEAR(out[i], in[i + 3], 1e-9);
+
+    // Over-asking clamps to what is there rather than running the read index
+    // past the write index.
+    CHECK(ring.push(in, 4) == 4);
+    ring.discard(100);
+    CHECK(ring.readAvailable() == 0);
+    CHECK(ring.writeAvailable() == ring.capacity() - 1);
+}
+
 // The property that actually matters: no lost or duplicated samples when
 // producer and consumer run concurrently on different cores.
 void testConcurrentIntegrity() {
@@ -107,6 +134,7 @@ int main() {
     RUN(testWrapAround);
     RUN(testOverflowIsClamped);
     RUN(testPopOrZeroSignalsUnderrun);
+    RUN(testDiscard);
     RUN(testConcurrentIntegrity);
     TEST_MAIN_END
 }

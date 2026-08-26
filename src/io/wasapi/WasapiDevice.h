@@ -10,6 +10,7 @@
 #include <audioclient.h>
 
 #include <atomic>
+#include <cstdint>
 #include <thread>
 #include <vector>
 
@@ -31,7 +32,11 @@ public:
     void start() override;
     void stop() override;
     void close() override;
-    DeviceStatus status() const override { return status_; }
+    DeviceStatus status() const override {
+        DeviceStatus s = status_;
+        s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
+        return s;
+    }
     bool isRunning() const override { return running_.load(std::memory_order_acquire); }
 
 private:
@@ -62,6 +67,7 @@ private:
     DeviceStatus      status_{};
     std::thread       thread_;
     std::atomic<bool> running_{false};
+    std::atomic<std::uint64_t> captureOverruns_{0};
     HANDLE            shutdownEvent_ = nullptr;
     bool              comInitialized_ = false;
 

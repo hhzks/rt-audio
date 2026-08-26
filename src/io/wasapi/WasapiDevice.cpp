@@ -337,13 +337,18 @@ void WasapiDevice::drainCapture() noexcept {
                           config_.numChannels, static_cast<FrameCount>(frames));
         }
 
-        const std::size_t want = static_cast<std::size_t>(frames) * config_.numChannels;
-        if (captureRing_.push(convertScratch_.data(), want) < want) {
-            // Ring is full: the render side is not consuming fast enough, or
-            // the capture clock is running faster. Drop and count it.
-            // A DriftCompensator belongs here.
-            /* stats: overflow */
+        const std::size_t ch   = static_cast<std::size_t>(config_.numChannels);
+        const std::size_t want = static_cast<std::size_t>(frames) * ch;
+
+        // Keep the ring holding only whole frames: evict the oldest audio, rounded up
+        // to a frame boundary, so a partial packet can never split the interleave.
+        const std::size_t avail = captureRing_.writeAvailable();
+        if (avail < want) {
+            captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+            const std::size_t deficit = want - avail;
+            captureRing_.discard(((deficit + ch - 1) / ch) * ch);
         }
+        captureRing_.push(convertScratch_.data(), want);
         captureService_->ReleaseBuffer(frames);
     }
 }

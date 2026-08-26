@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Types.h"
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,6 +42,10 @@ struct DeviceStatus {
     double     estimatedRoundTripMs = 0.0; // driver's claim -- always optimistic
     std::string backendName;
     std::string inputName, outputName;
+
+    // Capture-path ring-full events. Distinct from AudioEngine's underrun
+    // count: this one means the producer outran the consumer.
+    std::uint64_t captureOverruns = 0;
 };
 
 class IAudioDevice {
