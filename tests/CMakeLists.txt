@@ -1,0 +1,16 @@
+function(rt_add_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE rt_engine rt_dsp rt_core)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    rt_set_warnings(${name})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+rt_add_test(test_spsc_ringbuffer)
+rt_add_test(test_biquad)
+rt_add_test(test_no_alloc)
+
+if(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_spsc_ringbuffer PRIVATE Threads::Threads)
+endif()
