@@ -3,6 +3,7 @@
 
 #include "io/IAudioDevice.h"
 #include "io/wasapi/ComPtr.h"
+#include "core/SampleConvert.h"
 #include "core/SpscRingBuffer.h"
 
 #include <windows.h>
@@ -45,6 +46,7 @@ private:
         ComPtr<IAudioClient> client;
         HANDLE               event = nullptr;
         WAVEFORMATEX*        format = nullptr;   // CoTaskMemFree on release
+        SampleFormat         sampleFormat = SampleFormat::Float32;
         UINT32               bufferFrames = 0;
         int                  channels = 0;
         void release();
@@ -72,7 +74,7 @@ private:
     bool              comInitialized_ = false;
 
     SpscRingBuffer     captureRing_;   // capture thread -> render, in engine channel layout
-    std::vector<float> engineIn_, engineOut_, convertScratch_;
+    std::vector<float> engineIn_, engineOut_, convertScratch_, deviceScratch_;
 };
 
 } // namespace rt

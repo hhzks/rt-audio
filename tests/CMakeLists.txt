@@ -10,6 +10,7 @@ rt_add_test(test_spsc_ringbuffer)
 rt_add_test(test_biquad)
 rt_add_test(test_no_alloc)
 rt_add_test(test_render_determinism)
+rt_add_test(test_sample_convert)
 
 if(UNIX)
     find_package(Threads REQUIRED)

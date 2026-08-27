@@ -68,6 +68,8 @@ int main(int argc, char** argv) {
         else if (arg == "--backend")   backend = parseBackend(next());
         else if (arg == "--block")     config.blockFrames = std::stoi(next());
         else if (arg == "--rate")      config.sampleRate = std::stod(next());
+        else if (arg == "--in")        config.inputId = next();
+        else if (arg == "--out")       config.outputId = next();
         else if (arg == "--exclusive") config.exclusiveMode = true;
         else if (arg == "--drive")     drive = std::stof(next());
         else if (arg == "--mix")       mix = std::stof(next());

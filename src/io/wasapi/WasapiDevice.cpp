@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <sstream>
+#include <string>
 #include <stdexcept>
 
 namespace rt {
@@ -42,17 +44,55 @@ std::wstring utf8ToWide(const std::string& s) {
     return w;
 }
 
-// We only handle 32-bit float here. Shared mode virtually always gives you
-// float from GetMixFormat, so this is not as restrictive as it sounds -- but
-// EXCLUSIVE mode will hand you 16 or 24-bit integer and you must convert.
-bool isFloat32(const WAVEFORMATEX* fmt) {
-    if (fmt->wBitsPerSample != 32) return false;
-    if (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
-    if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
-        return ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+std::optional<SampleFormat> detectFormat(const WAVEFORMATEX* fmt) noexcept {
+    const bool ext = fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE;
+    GUID sub{};
+    if (ext) sub = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt)->SubFormat;
+
+    const bool isFloat = ext ? (sub == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+                             : (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+    const bool isPcm   = ext ? (sub == KSDATAFORMAT_SUBTYPE_PCM)
+                             : (fmt->wFormatTag == WAVE_FORMAT_PCM);
+
+    if (isFloat && fmt->wBitsPerSample == 32) return SampleFormat::Float32;
+    if (isPcm) {
+        switch (fmt->wBitsPerSample) {
+            case 16: return SampleFormat::Int16;
+            case 24: return SampleFormat::Int24;
+            case 32: return SampleFormat::Int32;
+            default: break;
+        }
     }
-    return false;
+    return std::nullopt;
+}
+
+const char* formatName(SampleFormat f) noexcept {
+    switch (f) {
+        case SampleFormat::Int16:   return "16-bit PCM";
+        case SampleFormat::Int24:   return "24-bit PCM";
+        case SampleFormat::Int32:   return "32-bit PCM";
+        case SampleFormat::Float32: return "32-bit float";
+    }
+    return "?";
+}
+
+WAVEFORMATEXTENSIBLE* allocFormat(WORD channels, DWORD rate, WORD bits, bool isFloat) noexcept {
+    auto* w = static_cast<WAVEFORMATEXTENSIBLE*>(CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE)));
+    if (!w) return nullptr;
+    std::memset(w, 0, sizeof(*w));
+    w->Format.wFormatTag      = WAVE_FORMAT_EXTENSIBLE;
+    w->Format.nChannels       = channels;
+    w->Format.nSamplesPerSec  = rate;
+    w->Format.wBitsPerSample  = bits;
+    w->Format.nBlockAlign     = static_cast<WORD>(channels * (bits / 8));
+    w->Format.nAvgBytesPerSec = static_cast<DWORD>(rate * w->Format.nBlockAlign);
+    w->Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    w->Samples.wValidBitsPerSample = bits;
+    w->dwChannelMask = channels == 1 ? SPEAKER_FRONT_CENTER
+                     : channels == 2 ? static_cast<DWORD>(SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT)
+                                     : static_cast<DWORD>((1u << channels) - 1u);
+    w->SubFormat = isFloat ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
+    return w;
 }
 
 // Map `srcCh` interleaved channels to `dstCh`. Mono in -> duplicate to all;
@@ -178,12 +218,45 @@ void WasapiDevice::initEndpoint(Endpoint& ep, EDataFlow flow, const std::string&
                   "IMMDevice::Activate(IAudioClient)");
 
     throwIfFailed(ep.client->GetMixFormat(&ep.format), "GetMixFormat");
-    if (!isFloat32(ep.format))
-        throw std::runtime_error(
-            "endpoint mix format is not 32-bit float. Add a sample-format converter "
-            "in initEndpoint before proceeding (see TODO in WasapiDevice.cpp).");
 
-    ep.channels = ep.format->nChannels;
+    // GetMixFormat describes SHARED mode. Exclusive endpoints often reject it.
+    if (exclusive &&
+        FAILED(ep.client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, ep.format, nullptr))) {
+        const WORD  chans = ep.format->nChannels;
+        const DWORD rate  = ep.format->nSamplesPerSec;
+        const struct { WORD bits; bool isFloat; } depths[] = {
+            { 32, true }, { 32, false }, { 24, false }, { 16, false },
+        };
+        // Channel count is negotiable too: capture endpoints are often mono-only
+        // in exclusive mode even when their mix format is stereo.
+        const WORD channelCandidates[] = { chans, 2, 1 };
+        bool found = false;
+        for (WORD c : channelCandidates) {
+            if (c == 0) continue;
+            for (const auto& d : depths) {
+                auto* w = allocFormat(c, rate, d.bits, d.isFloat);
+                if (!w) continue;
+                if (SUCCEEDED(ep.client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
+                                                           &w->Format, nullptr))) {
+                    CoTaskMemFree(ep.format);
+                    ep.format = &w->Format;
+                    found = true;
+                    break;
+                }
+                CoTaskMemFree(w);
+            }
+            if (found) break;
+        }
+        if (!found)
+            throw std::runtime_error("endpoint accepted no exclusive-mode format "
+                                     "(tried 32f, 32, 24, 16-bit at the mix rate)");
+    }
+
+    const auto detected = detectFormat(ep.format);
+    if (!detected)
+        throw std::runtime_error("endpoint format is not 16/24/32-bit PCM or 32-bit float");
+    ep.sampleFormat = *detected;
+    ep.channels     = ep.format->nChannels;
 
     bool initialized = false;
 
@@ -284,11 +357,15 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
     convertScratch_.assign(maxBlock * idx(std::max(capture_.channels, render_.channels)), 0.0f);
+    deviceScratch_.assign(maxBlock * idx(std::max(capture_.channels, render_.channels)), 0.0f);
 
     status_.sampleRate  = sr;
     status_.blockFrames = static_cast<FrameCount>(render_.bufferFrames);
     status_.numChannels = engineCh;
-    status_.backendName = config.exclusiveMode ? "WASAPI (exclusive)" : "WASAPI (shared)";
+    status_.backendName = std::string(config.exclusiveMode ? "WASAPI (exclusive)"
+                                                          : "WASAPI (shared)")
+                        + " in " + formatName(capture_.sampleFormat)
+                        + " out " + formatName(render_.sampleFormat);
     status_.estimatedRoundTripMs =
         1000.0 * (capture_.bufferFrames + render_.bufferFrames) / sr;
 
@@ -328,12 +405,14 @@ void WasapiDevice::drainCapture() noexcept {
         if (FAILED(captureService_->GetBuffer(&data, &frames, &flags, nullptr, nullptr)))
             break;
 
-        const auto* src = reinterpret_cast<const float*>(data);
         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
             std::memset(convertScratch_.data(), 0,
                         sizeof(float) * static_cast<std::size_t>(frames) * idx(config_.numChannels));
         } else {
-            remapChannels(src, capture_.channels, convertScratch_.data(),
+            toFloat(data, deviceScratch_.data(),
+                    static_cast<std::size_t>(frames) * idx(capture_.channels),
+                    capture_.sampleFormat);
+            remapChannels(deviceScratch_.data(), capture_.channels, convertScratch_.data(),
                           config_.numChannels, static_cast<FrameCount>(frames));
         }
 
@@ -370,8 +449,11 @@ void WasapiDevice::fillRender() noexcept {
     callback_->audioDeviceProcess(engineIn_.data(), engineOut_.data(),
                                   static_cast<FrameCount>(framesToWrite));
 
-    remapChannels(engineOut_.data(), ch, reinterpret_cast<float*>(out),
+    remapChannels(engineOut_.data(), ch, deviceScratch_.data(),
                   render_.channels, static_cast<FrameCount>(framesToWrite));
+    fromFloat(deviceScratch_.data(), out,
+              static_cast<std::size_t>(framesToWrite) * idx(render_.channels),
+              render_.sampleFormat);
 
     renderService_->ReleaseBuffer(framesToWrite, 0);
 }

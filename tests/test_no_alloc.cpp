@@ -1,13 +1,7 @@
 // THE MOST IMPORTANT TEST IN THIS PROJECT.
 //
-// It overrides global operator new/delete to set a flag, then runs a full
-// engine block and asserts nothing allocated. This is what catches the
-// std::vector you accidentally grow inside a filter six months from now --
-// a bug that otherwise shows up as an intermittent click that only happens on
-// someone else's machine.
-//
 // C++ has no way to enforce realtime safety at compile time, so this runtime
-// trap is the closest substitute. Run it in CI on every commit.
+// trap is the closest substitute.
 
 #include "engine/AudioEngine.h"
 #include "dsp/Biquad.h"
