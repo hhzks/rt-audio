@@ -43,9 +43,7 @@ struct DeviceStatus {
     std::string backendName;
     std::string inputName, outputName;
 
-    // Capture-path ring-full events. Distinct from AudioEngine's underrun
-    // count: this one means the producer outran the consumer.
-    std::uint64_t captureOverruns = 0;
+    std::uint64_t captureOverruns = 0;   // ring-full events; not engine underruns
 };
 
 class IAudioDevice {

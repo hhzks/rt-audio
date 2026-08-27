@@ -13,7 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # GCC 14 is the first release CMake maps to -std=c++26.
       - name: Install toolchain
         run: |
           sudo apt-get update
@@ -48,8 +47,6 @@ jobs:
       - name: Install Ninja
         run: choco install ninja -y
 
-      # MSVC cannot build this project; clang-cl is required. The runner image
-      # ships LLVM at C:\Program Files\LLVM.
       - name: Add LLVM to PATH
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8

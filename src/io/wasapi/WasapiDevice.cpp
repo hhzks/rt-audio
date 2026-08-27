@@ -340,8 +340,7 @@ void WasapiDevice::drainCapture() noexcept {
         const std::size_t ch   = static_cast<std::size_t>(config_.numChannels);
         const std::size_t want = static_cast<std::size_t>(frames) * ch;
 
-        // Keep the ring holding only whole frames: evict the oldest audio, rounded up
-        // to a frame boundary, so a partial packet can never split the interleave.
+        // Evict oldest, rounded to whole frames, so the interleave never splits.
         const std::size_t avail = captureRing_.writeAvailable();
         if (avail < want) {
             captureOverruns_.fetch_add(1, std::memory_order_relaxed);
