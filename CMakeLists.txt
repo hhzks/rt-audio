@@ -1,17 +1,42 @@
 cmake_minimum_required(VERSION 3.25)
 project(rt_audio LANGUAGES CXX VERSION 0.1.0)
 
+# Back-fill the mapping so we build on CMake 3.25+ rather than
+# forcing every contributor onto 4.1.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 17.0
+   AND NOT CMAKE_CXX26_STANDARD_COMPILE_OPTION)
+    set(CMAKE_CXX26_STANDARD_COMPILE_OPTION  "-std:c++latest")
+    set(CMAKE_CXX26_EXTENSION_COMPILE_OPTION "-std:c++latest")
+    set(CMAKE_CXX_STANDARD_LATEST 26)
+    message(STATUS "rt_audio: back-filled clang-cl C++26 mapping "
+                   "(CMake ${CMAKE_VERSION} predates it)")
+endif()
+
 set(RT_CXX_STANDARD 26)
 
 if(CMAKE_CXX_STANDARD_LATEST LESS RT_CXX_STANDARD)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        set(_rt_hint
+            "MSVC has no /std:c++26 flag in any release, so updating Visual "
+            "Studio will not help. Build with clang-cl instead:
+"
+            "    winget install LLVM.LLVM
+"
+            "    cmake --preset windows-clang-cl
+")
+    else()
+        set(_rt_hint
+            "Need GCC >= 14 or Clang >= 17. CMake must also know the mapping; "
+            "this CMake is ${CMAKE_VERSION}, and GCC/Clang need >= 3.25.
+")
+    endif()
     message(FATAL_ERROR
         "rt_audio requires C++${RT_CXX_STANDARD}, but "
         "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} tops out at "
-        "C++${CMAKE_CXX_STANDARD_LATEST}.\n"
-        "MSVC has no /std:c++26 flag in any release, so updating Visual Studio "
-        "will not help. Build with clang-cl instead:\n"
-        "    winget install LLVM.LLVM\n"
-        "    cmake --preset windows-clang-cl\n")
+        "C++${CMAKE_CXX_STANDARD_LATEST}.
+" ${_rt_hint})
 endif()
 
 set(CMAKE_CXX_STANDARD ${RT_CXX_STANDARD})
