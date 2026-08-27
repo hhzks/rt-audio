@@ -6,13 +6,7 @@
 namespace rt {
 
 // SetThreadPriority alone is NOT enough for audio on Windows. MMCSS ("Pro
-// Audio" task) is what actually gets you scheduled ahead of the rest of the
-// system. Register on the audio thread itself, from inside that thread.
-//
-// Note this is priority boosting, not a realtime scheduler -- a badly written
-// third-party kernel driver holding a DPC for 3 ms will still stall you, and
-// there is nothing you can do about it from user space. Run LatencyMon when
-// dropouts have no visible cause in your own code.
+// Audio" task) is what gets you scheduled ahead of the rest of the system.
 class MmcssScope {
 public:
     MmcssScope() {
