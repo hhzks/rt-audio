@@ -462,7 +462,7 @@ void WasapiDevice::threadMain() {
     // Each thread using COM must initialise it. MTA so our objects are usable
     // from here even though they were created on the caller's thread.
     const HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    MmcssScope mmcss;   // "Pro Audio" scheduling for the lifetime of this thread
+    MmcssScope _;   // "Pro Audio" scheduling for the lifetime of this thread
 
     // Prefill the render buffer with silence. Starting an empty stream produces
     // an audible click and an immediate underrun on some drivers.

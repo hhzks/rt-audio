@@ -61,7 +61,7 @@ void AudioEngine::processInterleaved(const float* in, float* out, FrameCount num
         return;
     }
 
-    DenormalGuard denormalGuard;
+    DenormalGuard _;
     const auto t0 = std::chrono::steady_clock::now();
 
     const int ch = numChannels_;
