@@ -18,7 +18,7 @@ inline int g_failures = 0;
 
 #define CHECK_NEAR(a, b, tol)                                                    \
     do {                                                                         \
-        const double va = (a), vb = (b);                                         \
+        const double va = static_cast<double>(a), vb = static_cast<double>(b);                                         \
         if (std::fabs(va - vb) > (tol)) {                                        \
             std::printf("  FAIL %s:%d  %s (%g) != %s (%g)\n",                    \
                         __FILE__, __LINE__, #a, va, #b, vb);                     \

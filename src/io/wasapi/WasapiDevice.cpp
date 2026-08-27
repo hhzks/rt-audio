@@ -59,12 +59,12 @@ bool isFloat32(const WAVEFORMATEX* fmt) {
 // more in than out -> take the first N; fewer -> repeat the last.
 void remapChannels(const float* src, int srcCh, float* dst, int dstCh, FrameCount frames) noexcept {
     if (srcCh == dstCh) {
-        std::memcpy(dst, src, sizeof(float) * static_cast<std::size_t>(frames) * dstCh);
+        std::memcpy(dst, src, sizeof(float) * static_cast<std::size_t>(frames) * idx(dstCh));
         return;
     }
     for (FrameCount i = 0; i < frames; ++i) {
-        const float* s = src + static_cast<std::size_t>(i) * srcCh;
-        float*       d = dst + static_cast<std::size_t>(i) * dstCh;
+        const float* s = src + static_cast<std::size_t>(i) * idx(srcCh);
+        float*       d = dst + static_cast<std::size_t>(i) * idx(dstCh);
         for (int c = 0; c < dstCh; ++c) d[c] = s[std::min(c, srcCh - 1)];
     }
 }
@@ -279,11 +279,11 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
 
     // Ring holds ~4 render buffers' worth. Too small and normal jitter causes
     // dropouts; too large and you have added pure latency for nothing.
-    captureRing_.reset(maxBlock * engineCh * 4);
+    captureRing_.reset(maxBlock * idx(engineCh) * 4);
 
-    engineIn_.assign(maxBlock * engineCh, 0.0f);
-    engineOut_.assign(maxBlock * engineCh, 0.0f);
-    convertScratch_.assign(maxBlock * std::max(capture_.channels, render_.channels), 0.0f);
+    engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
+    engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
+    convertScratch_.assign(maxBlock * idx(std::max(capture_.channels, render_.channels)), 0.0f);
 
     status_.sampleRate  = sr;
     status_.blockFrames = static_cast<FrameCount>(render_.bufferFrames);
@@ -331,7 +331,7 @@ void WasapiDevice::drainCapture() noexcept {
         const auto* src = reinterpret_cast<const float*>(data);
         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
             std::memset(convertScratch_.data(), 0,
-                        sizeof(float) * static_cast<std::size_t>(frames) * config_.numChannels);
+                        sizeof(float) * static_cast<std::size_t>(frames) * idx(config_.numChannels));
         } else {
             remapChannels(src, capture_.channels, convertScratch_.data(),
                           config_.numChannels, static_cast<FrameCount>(frames));
@@ -363,7 +363,7 @@ void WasapiDevice::fillRender() noexcept {
     if (FAILED(renderService_->GetBuffer(framesToWrite, &out))) return;
 
     const int         ch   = config_.numChannels;
-    const std::size_t need = static_cast<std::size_t>(framesToWrite) * ch;
+    const std::size_t need = static_cast<std::size_t>(framesToWrite) * idx(ch);
 
     captureRing_.popOrZero(engineIn_.data(), need);
 

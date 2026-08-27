@@ -71,7 +71,7 @@ void Biquad::process(AudioBufferView& io) noexcept {
         float* x = io.channel(ch);
         double z1 = state_[idx(ch)].z1, z2 = state_[idx(ch)].z2;
         for (FrameCount i = 0; i < n; ++i) {
-            const double in  = x[i];
+            const double in  = static_cast<double>(x[i]);
             const double out = b0_ * in + z1;
             z1 = b1_ * in - a1_ * out + z2;
             z2 = b2_ * in - a2_ * out;
