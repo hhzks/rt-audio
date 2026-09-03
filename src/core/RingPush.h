@@ -23,7 +23,7 @@ inline bool pushEvictingOldest(SpscRingBuffer& ring, const float* src,
     const std::size_t room = ring.writeAvailable();
     const std::size_t fit = (room / channels) * channels;
     const std::size_t clamped_fit = fit < samples ? fit : samples;
-    ring.push(src + (samples - clamped_fit), fit);
+    ring.push(src + (samples - clamped_fit), clamped_fit);
 
     return evicted;
 }
