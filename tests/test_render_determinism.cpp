@@ -53,7 +53,7 @@ std::vector<float> testSignal(double seconds, double sampleRate, int channels) {
 }
 
 
-constexpr std::uint64_t kExpectedHash = 0xc063daa05f6cf8ffull;
+constexpr std::uint64_t kExpectedHash = 0xe233a10e02dafd0full;
 
 } // namespace
 

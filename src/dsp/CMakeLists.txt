@@ -2,6 +2,7 @@ add_library(rt_dsp STATIC
     EffectChain.cpp
     Biquad.cpp
     Waveshaper.cpp
+    Oversampler.cpp
     NoiseGate.cpp
 )
 target_link_libraries(rt_dsp PUBLIC rt_core)

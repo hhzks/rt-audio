@@ -11,6 +11,8 @@ rt_add_test(test_biquad)
 rt_add_test(test_no_alloc)
 rt_add_test(test_render_determinism)
 rt_add_test(test_sample_convert)
+rt_add_test(test_ring_push)
+rt_add_test(test_oversampler)
 
 if(UNIX)
     find_package(Threads REQUIRED)
