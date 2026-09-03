@@ -2,6 +2,9 @@
 #include "io/wasapi/WasapiDevice.h"
 #include "io/wasapi/MmcssScope.h"
 
+#include "core/ChannelMap.h"
+#include "core/RingPush.h"
+
 #include <functiondiscoverykeys_devpkey.h>
 #include <mmreg.h>
 
@@ -93,20 +96,6 @@ WAVEFORMATEXTENSIBLE* allocFormat(WORD channels, DWORD rate, WORD bits, bool isF
                                      : static_cast<DWORD>((1u << channels) - 1u);
     w->SubFormat = isFloat ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
     return w;
-}
-
-// Map `srcCh` interleaved channels to `dstCh`. Mono in -> duplicate to all;
-// more in than out -> take the first N; fewer -> repeat the last.
-void remapChannels(const float* src, int srcCh, float* dst, int dstCh, FrameCount frames) noexcept {
-    if (srcCh == dstCh) {
-        std::memcpy(dst, src, sizeof(float) * static_cast<std::size_t>(frames) * idx(dstCh));
-        return;
-    }
-    for (FrameCount i = 0; i < frames; ++i) {
-        const float* s = src + static_cast<std::size_t>(i) * idx(srcCh);
-        float*       d = dst + static_cast<std::size_t>(i) * idx(dstCh);
-        for (int c = 0; c < dstCh; ++c) d[c] = s[std::min(c, srcCh - 1)];
-    }
 }
 
 } // namespace
@@ -419,14 +408,8 @@ void WasapiDevice::drainCapture() noexcept {
         const std::size_t ch   = static_cast<std::size_t>(config_.numChannels);
         const std::size_t want = static_cast<std::size_t>(frames) * ch;
 
-        // Evict oldest, rounded to whole frames, so the interleave never splits.
-        const std::size_t avail = captureRing_.writeAvailable();
-        if (avail < want) {
+        if (pushEvictingOldest(captureRing_, convertScratch_.data(), want, ch))
             captureOverruns_.fetch_add(1, std::memory_order_relaxed);
-            const std::size_t deficit = want - avail;
-            captureRing_.discard(((deficit + ch - 1) / ch) * ch);
-        }
-        captureRing_.push(convertScratch_.data(), want);
         captureService_->ReleaseBuffer(frames);
     }
 }
