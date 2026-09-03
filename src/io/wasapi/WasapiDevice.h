@@ -5,6 +5,8 @@
 #include "io/wasapi/ComPtr.h"
 #include "core/SampleConvert.h"
 #include "core/SpscRingBuffer.h"
+#include "core/DriftController.h"
+#include "dsp/AsyncResampler.h"
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -73,8 +75,12 @@ private:
     HANDLE            shutdownEvent_ = nullptr;
     bool              comInitialized_ = false;
 
-    SpscRingBuffer     captureRing_;   // capture thread -> render, in engine channel layout
-    std::vector<float> engineIn_, engineOut_, convertScratch_, deviceScratch_;
+    SpscRingBuffer     captureRing_;   // capture thread -> render, in RENDER-rate engine layout
+    std::vector<float> engineIn_, engineOut_, convertScratch_, deviceScratch_, resampleScratch_;
+
+    AsyncResampler  resampler_;
+    DriftController drift_;
+    double          nominalRatio_ = 1.0;   // capture frames per render frame
 };
 
 } // namespace rt

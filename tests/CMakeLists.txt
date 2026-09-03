@@ -13,6 +13,8 @@ rt_add_test(test_render_determinism)
 rt_add_test(test_sample_convert)
 rt_add_test(test_ring_push)
 rt_add_test(test_oversampler)
+rt_add_test(test_async_resampler)
+rt_add_test(test_drift_controller)
 
 if(UNIX)
     find_package(Threads REQUIRED)

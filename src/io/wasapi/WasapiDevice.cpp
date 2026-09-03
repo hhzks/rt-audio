@@ -322,11 +322,6 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     initEndpoint(capture_, eCapture, config.inputId,  config.blockFrames, config.exclusiveMode);
     initEndpoint(render_,  eRender,  config.outputId, config.blockFrames, config.exclusiveMode);
 
-    if (capture_.format->nSamplesPerSec != render_.format->nSamplesPerSec)
-        throw std::runtime_error(
-            "capture and render are running at different sample rates. Set both to the "
-            "same rate in Windows Sound settings, or add a resampler in drainCapture().");
-
     throwIfFailed(capture_.client->GetService(__uuidof(IAudioCaptureClient),
                                              captureService_.putVoid()),
                   "GetService(IAudioCaptureClient)");
@@ -339,14 +334,27 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     const auto   maxBlock = static_cast<std::size_t>(
         std::max(capture_.bufferFrames, render_.bufferFrames));
 
+    // Capture frames consumed per render frame. The two endpoints are separate
+    // crystals, so this is never exactly right for long -- drift_ trims it.
+    nominalRatio_ = static_cast<double>(capture_.format->nSamplesPerSec) / sr;
+
     // Ring holds ~4 render buffers' worth. Too small and normal jitter causes
     // dropouts; too large and you have added pure latency for nothing.
     captureRing_.reset(maxBlock * idx(engineCh) * 4);
+
+    resampler_.prepare(engineCh, nominalRatio_);
+    drift_.prepare(captureRing_.capacity() / 2, 0.002);
 
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
     convertScratch_.assign(maxBlock * idx(std::max(capture_.channels, render_.channels)), 0.0f);
     deviceScratch_.assign(maxBlock * idx(std::max(capture_.channels, render_.channels)), 0.0f);
+
+    // Resampling 44.1 -> 48 makes a packet LONGER than it arrived, so this one
+    // cannot be sized off maxBlock like the others.
+    resampleScratch_.assign(
+        idx(AsyncResampler::maxOutputFor(static_cast<FrameCount>(maxBlock), nominalRatio_))
+            * idx(engineCh), 0.0f);
 
     status_.sampleRate  = sr;
     status_.blockFrames = static_cast<FrameCount>(render_.bufferFrames);
@@ -356,7 +364,13 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
                         + " in " + formatName(capture_.sampleFormat)
                         + " out " + formatName(render_.sampleFormat);
     status_.estimatedRoundTripMs =
-        1000.0 * (capture_.bufferFrames + render_.bufferFrames) / sr;
+        1000.0 * (capture_.bufferFrames + render_.bufferFrames) / sr
+      + 1000.0 * AsyncResampler::latencyFrames()
+            / static_cast<double>(capture_.format->nSamplesPerSec);
+
+    if (capture_.format->nSamplesPerSec != render_.format->nSamplesPerSec)
+        status_.backendName += " asrc " + std::to_string(capture_.format->nSamplesPerSec)
+                             + "->" + std::to_string(render_.format->nSamplesPerSec);
 
     shutdownEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
@@ -405,10 +419,18 @@ void WasapiDevice::drainCapture() noexcept {
                           config_.numChannels, static_cast<FrameCount>(frames));
         }
 
-        const std::size_t ch   = static_cast<std::size_t>(config_.numChannels);
-        const std::size_t want = static_cast<std::size_t>(frames) * ch;
+        const std::size_t ch = static_cast<std::size_t>(config_.numChannels);
 
-        if (pushEvictingOldest(captureRing_, convertScratch_.data(), want, ch))
+        // Nominal rate difference plus the drift trim, recomputed per packet.
+        // Ring fill is the only observable that says which crystal runs fast.
+        resampler_.setRatio(nominalRatio_ * drift_.update(captureRing_.readAvailable()));
+
+        const FrameCount produced =
+            resampler_.process(convertScratch_.data(), static_cast<FrameCount>(frames),
+                               resampleScratch_.data(),
+                               static_cast<FrameCount>(resampleScratch_.size() / ch));
+
+        if (pushEvictingOldest(captureRing_, resampleScratch_.data(), idx(produced) * ch, ch))
             captureOverruns_.fetch_add(1, std::memory_order_relaxed);
         captureService_->ReleaseBuffer(frames);
     }
