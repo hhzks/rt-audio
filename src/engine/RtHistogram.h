@@ -1,12 +1,15 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 
 #include "core/Types.h"
 
 namespace rt {
+
+struct HistogramSnapshot;
 
 class RtHistogram {
 public:
@@ -39,6 +42,20 @@ public:
         const int exp = kMinExp + (b - 1) / kSubCount;
         return bucketLowerNs(b) + (1ull << (exp - kSubBits));
     }
+
+    void record(std::uint64_t ns) noexcept {
+        buckets_[idx(bucketFor(ns))].fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void reset() noexcept {
+        for (auto& b : buckets_) b.store(0, std::memory_order_relaxed);
+    }
+
+    inline HistogramSnapshot peek()  const noexcept;
+    inline HistogramSnapshot drain()       noexcept;
+
+private:
+    alignas(64) std::array<std::atomic<std::uint64_t>, idx(kBucketCount)> buckets_{};
 };
 
 struct HistogramSnapshot {
@@ -72,5 +89,23 @@ struct HistogramSnapshot {
     std::uint64_t underflow() const noexcept { return counts[0]; }
     std::uint64_t overflow()  const noexcept { return counts[idx(RtHistogram::kBucketCount - 1)]; }
 };
+
+inline HistogramSnapshot RtHistogram::peek() const noexcept {
+    HistogramSnapshot s;
+    for (std::size_t i = 0; i < buckets_.size(); ++i) {
+        s.counts[i] = buckets_[i].load(std::memory_order_relaxed);
+        s.total += s.counts[i];
+    }
+    return s;
+}
+
+inline HistogramSnapshot RtHistogram::drain() noexcept {
+    HistogramSnapshot s;
+    for (std::size_t i = 0; i < buckets_.size(); ++i) {
+        s.counts[i] = buckets_[i].exchange(0, std::memory_order_relaxed);
+        s.total += s.counts[i];
+    }
+    return s;
+}
 
 } // namespace rt

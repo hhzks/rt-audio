@@ -98,6 +98,40 @@ void testSnapshotAdd() {
     CHECK(a.counts[idx(RtHistogram::bucketFor(2'000'000))] == 1);
 }
 
+void testRecordAndPeek() {
+    RtHistogram h;
+    for (int i = 0; i < 100; ++i) h.record(20'000);
+    h.record(2'000'000);
+    const auto s = h.peek();
+    CHECK(s.total == 101);
+    CHECK(s.counts[idx(RtHistogram::bucketFor(20'000))] == 100);
+    CHECK(s.maxNs() >= 2'000'000);
+}
+
+void testPeekIsNonDestructive() {
+    RtHistogram h;
+    h.record(20'000);
+    CHECK(h.peek().total == 1);
+    CHECK(h.peek().total == 1);
+}
+
+void testDrainIsDestructiveAndLossless() {
+    RtHistogram h;
+    for (int i = 0; i < 50; ++i) h.record(20'000);
+    const auto first = h.drain();
+    CHECK(first.total == 50);
+    const auto second = h.drain();
+    CHECK(second.total == 0);
+    CHECK(h.peek().total == 0);
+}
+
+void testReset() {
+    RtHistogram h;
+    h.record(20'000);
+    h.reset();
+    CHECK(h.peek().total == 0);
+}
+
 int main() {
     RUN(testBucketMonotonic);
     RUN(testBucketRoundTrip);
@@ -108,5 +142,9 @@ int main() {
     RUN(testPercentileClamped);
     RUN(testPercentileNoTruncationBias);
     RUN(testSnapshotAdd);
+    RUN(testRecordAndPeek);
+    RUN(testPeekIsNonDestructive);
+    RUN(testDrainIsDestructiveAndLossless);
+    RUN(testReset);
     TEST_MAIN_END
 }
