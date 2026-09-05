@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <thread>
+#include <vector>
 
 using namespace rt;
 
@@ -135,22 +136,33 @@ void testReset() {
 }
 
 void testConcurrentDrainLosesNothing() {
-    RtHistogram h;
-    constexpr int kRecords = 200'000;
-    std::atomic<bool> done{false};
+    constexpr int kWriters          = 3;
+    constexpr int kRecordsPerWriter = 50'000;
+    constexpr int kTrials           = 20;
 
-    std::thread writer([&] {
-        for (int i = 0; i < kRecords; ++i) h.record(20'000 + static_cast<std::uint64_t>(i % 97));
-        done.store(true, std::memory_order_release);
-    });
+    for (int trial = 0; trial < kTrials; ++trial) {
+        RtHistogram h;
+        std::atomic<int> finished{0};
 
-    HistogramSnapshot cumulative;
-    while (!done.load(std::memory_order_acquire))
+        std::vector<std::thread> writers;
+        for (int w = 0; w < kWriters; ++w) {
+            writers.emplace_back([&h, &finished] {
+                for (int i = 0; i < kRecordsPerWriter; ++i)
+                    h.record(20'000 + static_cast<std::uint64_t>(i % 97));
+                finished.fetch_add(1, std::memory_order_release);
+            });
+        }
+
+        HistogramSnapshot cumulative;
+        while (finished.load(std::memory_order_acquire) < kWriters)
+            cumulative.add(h.drain());
+
+        for (auto& t : writers) t.join();
         cumulative.add(h.drain());
 
-    writer.join();
-    cumulative.add(h.drain());
-    CHECK(cumulative.total == kRecords);
+        CHECK(cumulative.total ==
+              static_cast<std::uint64_t>(kWriters) * kRecordsPerWriter);
+    }
 }
 
 int main() {
