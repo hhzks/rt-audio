@@ -130,16 +130,20 @@ int main(int argc, char** argv) {
         device->start();
 
         std::atomic<bool> quit{false};
+        HistogramSnapshot cumulative;
         std::thread reporter([&] {
+            auto& s = engine.stats();
             while (!quit.load()) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
-                auto& s = engine.stats();
-                std::cout << "\rload " << std::fixed << std::setprecision(1)
-                          << (s.loadFactor() * 100.0) << "%   xruns "
-                          << s.xruns.load() << "   peak "
-                          << std::setprecision(3) << s.peakOutputLevel.load()
-                          << "        " << std::flush;
-                s.resetPeaks();
+                const auto window = s.callbackNanos.drain();
+                cumulative.add(window);
+                std::cout << "\r1s p50 " << static_cast<double>(window.nsAtPercentile(0.5)) / 1000.0 << "us"
+                          << "  p99 " << static_cast<double>(window.nsAtPercentile(0.99)) / 1000.0 << "us"
+                          << "   run p99.9 " << static_cast<double>(cumulative.nsAtPercentile(0.999)) / 1000.0 << "us"
+                          << " (" << (100.0 * static_cast<double>(cumulative.nsAtPercentile(0.999)) /
+                                      static_cast<double>(s.blockDeadlineNanos.load())) << "%)"
+                          << "  max " << static_cast<double>(cumulative.maxNs()) / 1000.0 << "us"
+                          << "  xruns " << s.xruns.load() << "        " << std::flush;
             }
         });
 
@@ -149,7 +153,9 @@ int main(int argc, char** argv) {
         device->stop();
 
         std::cout << "\n\ntotal callbacks: " << engine.stats().callbackCount.load()
-                  << "   xruns: " << engine.stats().xruns.load() << "\n";
+                  << "   xruns: " << engine.stats().xruns.load()
+                  << "   run p99.9 " << static_cast<double>(cumulative.nsAtPercentile(0.999)) / 1000.0 << "us"
+                  << "   max " << static_cast<double>(cumulative.maxNs()) / 1000.0 << "us\n";
         return 0;
 
     } catch (const std::exception& e) {
