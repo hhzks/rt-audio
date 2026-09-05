@@ -80,6 +80,13 @@ void testPercentileClamped() {
     CHECK(s.nsAtPercentile(2.0)  == s.nsAtPercentile(1.0));
 }
 
+void testPercentileNoTruncationBias() {
+    HistogramSnapshot s;
+    put(s, 20'000, 28);
+    put(s, 2'000'000, 72);
+    CHECK(s.nsAtPercentile(0.29) >= 2'000'000);
+}
+
 void testSnapshotAdd() {
     HistogramSnapshot a, b;
     put(a, 20'000, 5);
@@ -99,6 +106,7 @@ int main() {
     RUN(testPercentiles);
     RUN(testEmptySnapshot);
     RUN(testPercentileClamped);
+    RUN(testPercentileNoTruncationBias);
     RUN(testSnapshotAdd);
     TEST_MAIN_END
 }

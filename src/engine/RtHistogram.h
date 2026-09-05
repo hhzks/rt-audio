@@ -53,11 +53,12 @@ struct HistogramSnapshot {
     std::uint64_t nsAtPercentile(double p) const noexcept {
         if (total == 0) return 0;
         p = std::clamp(p, 0.0, 1.0);
-        const auto target = static_cast<std::uint64_t>(p * static_cast<double>(total));
+        const double threshold = p * static_cast<double>(total);
         std::uint64_t cum = 0;
         for (int b = 0; b < RtHistogram::kBucketCount; ++b) {
             cum += counts[idx(b)];
-            if (cum >= target && counts[idx(b)] != 0) return RtHistogram::bucketUpperNs(b);
+            if (static_cast<double>(cum) >= threshold && counts[idx(b)] != 0)
+                return RtHistogram::bucketUpperNs(b);
         }
         return maxNs();
     }
