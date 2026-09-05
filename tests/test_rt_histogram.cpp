@@ -15,7 +15,7 @@ void testBucketMonotonic() {
 }
 
 void testBucketRoundTrip() {
-    for (std::uint64_t ns = 256; ns < 134'000'000ull; ns += ns / 32 + 1) {
+    for (std::uint64_t ns = 256; ns < (1ull << 28); ns += ns / 32 + 1) {
         const int b = RtHistogram::bucketFor(ns);
         CHECK(RtHistogram::bucketLowerNs(b) <= ns);
         CHECK(ns < RtHistogram::bucketUpperNs(b));
@@ -36,6 +36,8 @@ void testUnderflowOverflow() {
     CHECK(RtHistogram::bucketFor(0)   == 0);
     CHECK(RtHistogram::bucketFor(255) == 0);
     CHECK(RtHistogram::bucketFor(256) == 1);
+    CHECK(RtHistogram::bucketFor(1ull << 27) == 305);
+    CHECK(RtHistogram::bucketFor((1ull << 28) - 1) == 320);
     CHECK(RtHistogram::bucketFor(1ull << 28) == RtHistogram::kBucketCount - 1);
     CHECK(RtHistogram::kBucketCount == 322);
 }
