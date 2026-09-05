@@ -3,7 +3,9 @@
 #include "core/Types.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <thread>
 
 using namespace rt;
 
@@ -132,6 +134,25 @@ void testReset() {
     CHECK(h.peek().total == 0);
 }
 
+void testConcurrentDrainLosesNothing() {
+    RtHistogram h;
+    constexpr int kRecords = 200'000;
+    std::atomic<bool> done{false};
+
+    std::thread writer([&] {
+        for (int i = 0; i < kRecords; ++i) h.record(20'000 + static_cast<std::uint64_t>(i % 97));
+        done.store(true, std::memory_order_release);
+    });
+
+    HistogramSnapshot cumulative;
+    while (!done.load(std::memory_order_acquire))
+        cumulative.add(h.drain());
+
+    writer.join();
+    cumulative.add(h.drain());
+    CHECK(cumulative.total == kRecords);
+}
+
 int main() {
     RUN(testBucketMonotonic);
     RUN(testBucketRoundTrip);
@@ -146,5 +167,6 @@ int main() {
     RUN(testPeekIsNonDestructive);
     RUN(testDrainIsDestructiveAndLossless);
     RUN(testReset);
+    RUN(testConcurrentDrainLosesNothing);
     TEST_MAIN_END
 }
