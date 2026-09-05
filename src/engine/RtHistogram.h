@@ -1,6 +1,10 @@
 #pragma once
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
+
+#include "core/Types.h"
 
 namespace rt {
 
@@ -35,6 +39,37 @@ public:
         const int exp = kMinExp + (b - 1) / kSubCount;
         return bucketLowerNs(b) + (1ull << (exp - kSubBits));
     }
+};
+
+struct HistogramSnapshot {
+    std::array<std::uint64_t, idx(RtHistogram::kBucketCount)> counts{};
+    std::uint64_t total = 0;
+
+    void add(const HistogramSnapshot& other) noexcept {
+        for (std::size_t i = 0; i < counts.size(); ++i) counts[i] += other.counts[i];
+        total += other.total;
+    }
+
+    std::uint64_t nsAtPercentile(double p) const noexcept {
+        if (total == 0) return 0;
+        p = std::clamp(p, 0.0, 1.0);
+        const auto target = static_cast<std::uint64_t>(p * static_cast<double>(total));
+        std::uint64_t cum = 0;
+        for (int b = 0; b < RtHistogram::kBucketCount; ++b) {
+            cum += counts[idx(b)];
+            if (cum >= target && counts[idx(b)] != 0) return RtHistogram::bucketUpperNs(b);
+        }
+        return maxNs();
+    }
+
+    std::uint64_t maxNs() const noexcept {
+        for (int b = RtHistogram::kBucketCount - 1; b >= 0; --b)
+            if (counts[idx(b)] != 0) return RtHistogram::bucketUpperNs(b);
+        return 0;
+    }
+
+    std::uint64_t underflow() const noexcept { return counts[0]; }
+    std::uint64_t overflow()  const noexcept { return counts[idx(RtHistogram::kBucketCount - 1)]; }
 };
 
 } // namespace rt

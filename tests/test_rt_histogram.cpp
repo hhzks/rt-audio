@@ -1,6 +1,8 @@
 #include "engine/RtHistogram.h"
 #include "TestHarness.h"
+#include "core/Types.h"
 
+#include <array>
 #include <cstdint>
 
 using namespace rt;
@@ -42,10 +44,58 @@ void testUnderflowOverflow() {
     CHECK(RtHistogram::kBucketCount == 322);
 }
 
+namespace {
+void put(HistogramSnapshot& s, std::uint64_t ns, std::uint64_t n) {
+    s.counts[idx(RtHistogram::bucketFor(ns))] += n;
+    s.total += n;
+}
+}
+
+void testPercentiles() {
+    HistogramSnapshot s;
+    put(s, 20'000, 990);        // 20 us
+    put(s, 2'000'000, 10);      // 2 ms
+    CHECK(s.total == 1000);
+
+    CHECK(s.nsAtPercentile(0.5) >= 20'000);
+    CHECK(s.nsAtPercentile(0.5) <  40'000);
+    CHECK(s.nsAtPercentile(0.999) >= 2'000'000);
+    CHECK(s.maxNs() >= 2'000'000);
+}
+
+void testEmptySnapshot() {
+    HistogramSnapshot s;
+    CHECK(s.nsAtPercentile(0.5) == 0);
+    CHECK(s.maxNs() == 0);
+    CHECK(s.total == 0);
+}
+
+void testPercentileClamped() {
+    HistogramSnapshot s;
+    put(s, 20'000, 10);
+    CHECK(s.nsAtPercentile(-1.0) >= 20'000);
+    CHECK(s.nsAtPercentile(2.0)  >= 20'000);
+}
+
+void testSnapshotAdd() {
+    HistogramSnapshot a, b;
+    put(a, 20'000, 5);
+    put(b, 20'000, 7);
+    put(b, 2'000'000, 1);
+    a.add(b);
+    CHECK(a.total == 13);
+    CHECK(a.counts[idx(RtHistogram::bucketFor(20'000))] == 12);
+    CHECK(a.counts[idx(RtHistogram::bucketFor(2'000'000))] == 1);
+}
+
 int main() {
     RUN(testBucketMonotonic);
     RUN(testBucketRoundTrip);
     RUN(testBucketRelativeWidth);
     RUN(testUnderflowOverflow);
+    RUN(testPercentiles);
+    RUN(testEmptySnapshot);
+    RUN(testPercentileClamped);
+    RUN(testSnapshotAdd);
     TEST_MAIN_END
 }
