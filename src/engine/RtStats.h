@@ -2,6 +2,8 @@
 #include <atomic>
 #include <cstdint>
 
+#include "engine/RtHistogram.h"
+
 namespace rt {
 
 // Written by the audio thread, read by anyone. Relaxed ordering throughout:
@@ -17,10 +19,12 @@ struct RtStats {
     std::atomic<std::uint64_t> peakCallbackNanos{0};
     std::atomic<std::uint64_t> blockDeadlineNanos{0};
     std::atomic<float>         peakOutputLevel{0.0f};
+    RtHistogram                callbackNanos;
 
     void recordCallback(std::uint64_t nanos) noexcept {
         callbackCount.fetch_add(1, std::memory_order_relaxed);
         lastCallbackNanos.store(nanos, std::memory_order_relaxed);
+        callbackNanos.record(nanos);
         auto prev = peakCallbackNanos.load(std::memory_order_relaxed);
         while (nanos > prev &&
                !peakCallbackNanos.compare_exchange_weak(prev, nanos, std::memory_order_relaxed)) {}
@@ -32,6 +36,13 @@ struct RtStats {
         const auto d = blockDeadlineNanos.load(std::memory_order_relaxed);
         if (d == 0) return 0.0;
         return static_cast<double>(peakCallbackNanos.load(std::memory_order_relaxed)) /
+               static_cast<double>(d);
+    }
+
+    double loadFactorAt(double p) const noexcept {
+        const auto d = blockDeadlineNanos.load(std::memory_order_relaxed);
+        if (d == 0) return 0.0;
+        return static_cast<double>(callbackNanos.peek().nsAtPercentile(p)) /
                static_cast<double>(d);
     }
 

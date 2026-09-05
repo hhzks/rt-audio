@@ -1,6 +1,7 @@
 #include "engine/RtHistogram.h"
 #include "TestHarness.h"
 #include "core/Types.h"
+#include "engine/AudioEngine.h"
 
 #include <array>
 #include <atomic>
@@ -165,6 +166,20 @@ void testConcurrentDrainLosesNothing() {
     }
 }
 
+void testEngineRecordsEveryCallbackAfterWarmUp() {
+    AudioEngine engine;
+    engine.prepare(48000.0, 128, 2);
+    CHECK(engine.stats().callbackNanos.peek().total == 0);
+
+    std::vector<float> in(128 * 2, 0.1f), out(128 * 2);
+    for (int i = 0; i < 50; ++i)
+        engine.processInterleaved(in.data(), out.data(), 128);
+
+    CHECK(engine.stats().callbackNanos.peek().total == 50);
+    CHECK(engine.stats().loadFactorAt(0.5) > 0.0);
+    CHECK(engine.stats().loadFactorAt(0.5) < 1.0);
+}
+
 int main() {
     RUN(testBucketMonotonic);
     RUN(testBucketRoundTrip);
@@ -180,5 +195,6 @@ int main() {
     RUN(testDrainIsDestructiveAndLossless);
     RUN(testReset);
     RUN(testConcurrentDrainLosesNothing);
+    RUN(testEngineRecordsEveryCallbackAfterWarmUp);
     TEST_MAIN_END
 }
