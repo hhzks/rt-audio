@@ -72,9 +72,12 @@ void testEmptySnapshot() {
 
 void testPercentileClamped() {
     HistogramSnapshot s;
-    put(s, 20'000, 10);
-    CHECK(s.nsAtPercentile(-1.0) >= 20'000);
-    CHECK(s.nsAtPercentile(2.0)  >= 20'000);
+    put(s, 20'000, 990);
+    put(s, 2'000'000, 10);
+    CHECK(s.nsAtPercentile(0.0) <  100'000);
+    CHECK(s.nsAtPercentile(1.0) >= 2'000'000);
+    CHECK(s.nsAtPercentile(-1.0) == s.nsAtPercentile(0.0));
+    CHECK(s.nsAtPercentile(2.0)  == s.nsAtPercentile(1.0));
 }
 
 void testSnapshotAdd() {
