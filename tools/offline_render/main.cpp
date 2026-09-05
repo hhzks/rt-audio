@@ -123,7 +123,9 @@ int main(int argc, char** argv) {
                   << "   p50 "   << static_cast<double>(h.nsAtPercentile(0.5))   / 1000.0 << " us"
                   << "   p99 "   << static_cast<double>(h.nsAtPercentile(0.99))  / 1000.0 << " us"
                   << "   p99.9 " << static_cast<double>(h.nsAtPercentile(0.999)) / 1000.0 << " us"
-                  << "   max "   << static_cast<double>(h.maxNs()) / 1000.0 << " us\n"
+                  << "   max "   << static_cast<double>(s.peakCallbackNanos.load(std::memory_order_relaxed)) / 1000.0 << " us";
+        if (h.overflow() != 0) std::cout << "   overflow " << h.overflow();
+        std::cout << "\n"
                   << "deadline " << static_cast<double>(s.blockDeadlineNanos.load()) / 1000.0
                   << " us   load(p99.9) " << (s.loadFactorAt(0.999) * 100.0) << "%\n";
         return 0;

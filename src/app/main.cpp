@@ -137,13 +137,20 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const auto window = s.callbackNanos.drain();
                 cumulative.add(window);
-                std::cout << "\r1s p50 " << static_cast<double>(window.nsAtPercentile(0.5)) / 1000.0 << "us"
+                const auto p999Ns = cumulative.nsAtPercentile(0.999);
+                const auto deadlineNs = s.blockDeadlineNanos.load();
+                const double p999Pct = deadlineNs == 0
+                    ? 0.0
+                    : 100.0 * static_cast<double>(p999Ns) / static_cast<double>(deadlineNs);
+                std::cout << std::fixed << std::setprecision(2)
+                          << "\r1s p50 " << static_cast<double>(window.nsAtPercentile(0.5)) / 1000.0 << "us"
                           << "  p99 " << static_cast<double>(window.nsAtPercentile(0.99)) / 1000.0 << "us"
-                          << "   run p99.9 " << static_cast<double>(cumulative.nsAtPercentile(0.999)) / 1000.0 << "us"
-                          << " (" << (100.0 * static_cast<double>(cumulative.nsAtPercentile(0.999)) /
-                                      static_cast<double>(s.blockDeadlineNanos.load())) << "%)"
-                          << "  max " << static_cast<double>(cumulative.maxNs()) / 1000.0 << "us"
-                          << "  xruns " << s.xruns.load() << "        " << std::flush;
+                          << "   run p99.9 " << static_cast<double>(p999Ns) / 1000.0 << "us"
+                          << " (" << p999Pct << "%)"
+                          << "  max " << static_cast<double>(s.peakCallbackNanos.load(std::memory_order_relaxed)) / 1000.0 << "us"
+                          << "  xruns " << s.xruns.load();
+                if (cumulative.overflow() != 0) std::cout << "  overflow " << cumulative.overflow();
+                std::cout << "        " << std::flush;
             }
         });
 
@@ -152,10 +159,13 @@ int main(int argc, char** argv) {
         reporter.join();
         device->stop();
 
-        std::cout << "\n\ntotal callbacks: " << engine.stats().callbackCount.load()
+        std::cout << std::fixed << std::setprecision(2)
+                  << "\n\ntotal callbacks: " << engine.stats().callbackCount.load()
                   << "   xruns: " << engine.stats().xruns.load()
                   << "   run p99.9 " << static_cast<double>(cumulative.nsAtPercentile(0.999)) / 1000.0 << "us"
-                  << "   max " << static_cast<double>(cumulative.maxNs()) / 1000.0 << "us\n";
+                  << "   max " << static_cast<double>(engine.stats().peakCallbackNanos.load(std::memory_order_relaxed)) / 1000.0 << "us";
+        if (cumulative.overflow() != 0) std::cout << "   overflow " << cumulative.overflow();
+        std::cout << "\n";
         return 0;
 
     } catch (const std::exception& e) {
