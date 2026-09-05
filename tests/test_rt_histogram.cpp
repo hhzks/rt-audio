@@ -166,6 +166,16 @@ void testConcurrentDrainLosesNothing() {
     }
 }
 
+void testOverflowReportedAtCeiling() {
+    RtHistogram h;
+    h.record(20'000);
+    h.record(1ull << 29);
+    const auto s = h.peek();
+    CHECK(s.overflow() == 1);
+    CHECK(s.maxNs() == (1ull << (RtHistogram::kMaxExp + 1)));
+    CHECK(s.maxNs() != UINT64_MAX);
+}
+
 void testEngineRecordsEveryCallbackAfterWarmUp() {
     AudioEngine engine;
     engine.prepare(48000.0, 128, 2);
@@ -195,6 +205,7 @@ int main() {
     RUN(testDrainIsDestructiveAndLossless);
     RUN(testReset);
     RUN(testConcurrentDrainLosesNothing);
+    RUN(testOverflowReportedAtCeiling);
     RUN(testEngineRecordsEveryCallbackAfterWarmUp);
     TEST_MAIN_END
 }

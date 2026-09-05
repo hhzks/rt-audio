@@ -38,7 +38,7 @@ public:
 
     static constexpr std::uint64_t bucketUpperNs(int b) noexcept {
         if (b <= 0) return 1ull << kMinExp;
-        if (b >= kBucketCount - 1) return UINT64_MAX;
+        if (b >= kBucketCount - 1) return 1ull << (kMaxExp + 1);
         const int exp = kMinExp + (b - 1) / kSubCount;
         return bucketLowerNs(b) + (1ull << (exp - kSubBits));
     }
