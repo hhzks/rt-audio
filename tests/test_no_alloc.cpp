@@ -4,6 +4,7 @@
 // trap is the closest substitute.
 
 #include "engine/AudioEngine.h"
+#include "engine/LoopbackProbe.h"
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
@@ -89,9 +90,27 @@ void testOversizedBlockIsSafe() {
     CHECK_NEAR(out[0], 0.0, 1e-9);
 }
 
+void testLoopbackProbeDoesNotAllocate() {
+    SweepConfig cfg;
+    cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
+    cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
+
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 2, cfg);
+    probe.arm();
+
+    std::vector<float> in(128 * 2, 0.1f), out(128 * 2);
+    g_allocations = 0;
+    g_trapArmed = true;
+    for (int i = 0; i < 100; ++i) probe.process(in.data(), out.data(), 128);
+    g_trapArmed = false;
+    CHECK(g_allocations.load() == 0);
+}
+
 int main() {
     RUN(testEngineBlockDoesNotAllocate);
     RUN(testBypassPathDoesNotAllocate);
     RUN(testOversizedBlockIsSafe);
+    RUN(testLoopbackProbeDoesNotAllocate);
     TEST_MAIN_END
 }

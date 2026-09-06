@@ -1,4 +1,5 @@
 #include "engine/LoopbackProbe.h"
+#include "engine/LatencyAnalyzer.h"
 #include "TestHarness.h"
 
 #include <cmath>
@@ -13,6 +14,31 @@ int zeroCrossings(const std::vector<float>& v, std::size_t from, std::size_t to)
         if ((v[i - 1] < 0.0f) != (v[i] < 0.0f)) ++n;
     return n;
 }
+
+class DelayLine {
+public:
+    DelayLine(int delayFrames, int channels)
+        : buf_(idx(delayFrames * channels), 0.0f), ch_(channels) {}
+
+    void read(float* dst, FrameCount n) noexcept {
+        for (std::size_t i = 0; i < idx(n * ch_); ++i) {
+            dst[i] = buf_[pos_];
+            pos_ = (pos_ + 1) % buf_.size();
+        }
+        pos_ = readStart_;
+    }
+    void write(const float* src, FrameCount n) noexcept {
+        for (std::size_t i = 0; i < idx(n * ch_); ++i) {
+            buf_[readStart_] = src[i];
+            readStart_ = (readStart_ + 1) % buf_.size();
+        }
+        pos_ = readStart_;
+    }
+private:
+    std::vector<float> buf_;
+    int ch_;
+    std::size_t pos_ = 0, readStart_ = 0;
+};
 }
 
 void testSweepLengthAndBounds() {
@@ -77,6 +103,32 @@ void testIrregularBlockSizes() {
     CHECK(probe.state() == ProbeState::Done);
 }
 
+void testProbeAndAnalyzerAgreeOnKnownDelay() {
+    SweepConfig cfg;
+    cfg.seconds = 0.1; cfg.primeSeconds = 0.02;
+    cfg.maxLatencySeconds = 0.05; cfg.tailSeconds = 0.02;
+
+    constexpr int D = 512;
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 2, cfg);
+    probe.arm();
+
+    DelayLine loop(D, 2);
+    std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 0.0f);
+    int guard = 0;
+    while (probe.state() != ProbeState::Done && guard++ < 100000) {
+        loop.read(in.data(), 128);
+        probe.process(in.data(), out.data(), 128);
+        loop.write(out.data(), 128);
+    }
+    CHECK(probe.state() == ProbeState::Done);
+
+    const auto r = analyzeLatency(probe.reference(), probe.captured(),
+                                  static_cast<int>(cfg.maxLatencySeconds * 48000.0), 48000.0);
+    CHECK(r.valid);
+    CHECK_NEAR(r.lagFrames, D, 0.5);
+}
+
 void testIdleAndDoneEmitSilence() {
     SweepConfig cfg;
     LoopbackProbe probe;
@@ -93,5 +145,6 @@ int main() {
     RUN(testStateMachineReachesDone);
     RUN(testIrregularBlockSizes);
     RUN(testIdleAndDoneEmitSilence);
+    RUN(testProbeAndAnalyzerAgreeOnKnownDelay);
     TEST_MAIN_END
 }
