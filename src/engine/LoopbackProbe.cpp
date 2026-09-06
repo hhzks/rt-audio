@@ -7,13 +7,21 @@
 namespace rt {
 
 void generateSweep(const SweepConfig& cfg, double sampleRate, std::vector<float>& out) {
+    out.clear();
+    if (!std::isfinite(cfg.seconds) || !std::isfinite(sampleRate)
+        || !std::isfinite(cfg.loHz) || !std::isfinite(cfg.hiHz)
+        || !std::isfinite(cfg.fadeSeconds) || !std::isfinite(cfg.amplitude)
+        || cfg.seconds <= 0.0 || sampleRate <= 0.0
+        || cfg.loHz <= 0.0 || cfg.hiHz <= 0.0 || cfg.loHz == cfg.hiHz) return;
+
     const auto n = static_cast<std::size_t>(cfg.seconds * sampleRate);
     out.assign(n, 0.0f);
     if (n == 0) return;
 
     const double T = cfg.seconds;
     const double R = std::log(cfg.hiHz / cfg.loHz);
-    const auto fade = static_cast<std::size_t>(cfg.fadeSeconds * sampleRate);
+    auto fade = static_cast<std::size_t>(cfg.fadeSeconds * sampleRate);
+    if (fade > n / 2) fade = n / 2;
 
     for (std::size_t i = 0; i < n; ++i) {
         const double t = static_cast<double>(i) / sampleRate;
