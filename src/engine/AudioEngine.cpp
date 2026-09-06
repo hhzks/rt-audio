@@ -48,6 +48,7 @@ void AudioEngine::warmUp() {
 
     chain_.reset();
     stats_.resetPeaks();
+    stats_.callbackNanos.reset();
     stats_.callbackCount.store(0, std::memory_order_relaxed);
     stats_.xruns.store(0, std::memory_order_relaxed);
 }

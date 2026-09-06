@@ -117,10 +117,17 @@ int main(int argc, char** argv) {
         writeWav(outPath, output);
 
         auto& s = engine.stats();
+        const auto h = s.callbackNanos.peek();
         std::cout << "wrote " << outPath << "  (" << totalFrames << " frames)\n"
-                  << "peak callback " << static_cast<double>(s.peakCallbackNanos.load()) / 1000.0 << " us"
-                  << "   deadline " << static_cast<double>(s.blockDeadlineNanos.load()) / 1000.0 << " us"
-                  << "   load " << (s.loadFactor() * 100.0) << "%\n";
+                  << "callbacks " << h.total
+                  << "   p50 "   << static_cast<double>(h.nsAtPercentile(0.5))   / 1000.0 << " us"
+                  << "   p99 "   << static_cast<double>(h.nsAtPercentile(0.99))  / 1000.0 << " us"
+                  << "   p99.9 " << static_cast<double>(h.nsAtPercentile(0.999)) / 1000.0 << " us"
+                  << "   max "   << static_cast<double>(s.peakCallbackNanos.load(std::memory_order_relaxed)) / 1000.0 << " us";
+        if (h.overflow() != 0) std::cout << "   overflow " << h.overflow();
+        std::cout << "\n"
+                  << "deadline " << static_cast<double>(s.blockDeadlineNanos.load()) / 1000.0
+                  << " us   load(p99.9) " << (s.loadFactorAt(0.999) * 100.0) << "%\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
