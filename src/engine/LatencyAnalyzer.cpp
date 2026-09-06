@@ -56,7 +56,8 @@ LatencyResult analyzeLatency(std::span<const float> reference,
         if (a > best) { best = a; peak = lag; }
     }
 
-    const std::size_t guard = N / 4;
+    const std::size_t guard = std::min(N / 4,
+        std::max<std::size_t>(8, static_cast<std::size_t>(0.002 * sampleRate)));
     double sidelobe = 0.0;
     for (std::size_t lag = 0; lag < lagCount; ++lag) {
         const std::size_t d = lag > peak ? lag - peak : peak - lag;

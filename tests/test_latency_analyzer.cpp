@@ -118,6 +118,18 @@ void testPureNoiseRejected() {
     CHECK(!r.rejectReason.empty());
 }
 
+void testCompetingPeakRejected() {
+    const auto ref = makeReference();
+    std::vector<float> cap(ref.size() + 9600, 0.0f);
+    for (std::size_t i = 0; i < ref.size(); ++i) {
+        cap[300 + i] += ref[i];
+        cap[800 + i] += 0.9f * ref[i];
+    }
+    const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
+    CHECK(!r.valid);
+    CHECK(r.rejectReason == "peak-to-sidelobe below 3.0");
+}
+
 int main() {
     RUN(testCleanDelayRecovered);
     RUN(testAttenuationDoesNotMatter);
@@ -126,5 +138,6 @@ int main() {
     RUN(testHalfSampleDelay);
     RUN(testBandlimitedStillDetected);
     RUN(testPureNoiseRejected);
+    RUN(testCompetingPeakRejected);
     TEST_MAIN_END
 }
