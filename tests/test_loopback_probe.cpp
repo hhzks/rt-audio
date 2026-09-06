@@ -41,9 +41,57 @@ void testSweepRisesInFrequency() {
     CHECK(late > early * 10);
 }
 
+void testStateMachineReachesDone() {
+    SweepConfig cfg;
+    cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
+    cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
+
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 2, cfg);
+    CHECK(probe.state() == ProbeState::Idle);
+    probe.arm();
+    CHECK(probe.state() == ProbeState::Priming);
+
+    std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 7.0f);
+    int guard = 0;
+    while (probe.state() != ProbeState::Done && guard++ < 100000)
+        probe.process(in.data(), out.data(), 128);
+    CHECK(probe.state() == ProbeState::Done);
+    CHECK(probe.captured().size() > 0);
+}
+
+void testIrregularBlockSizes() {
+    SweepConfig cfg;
+    cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
+    cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
+
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 144, 2, cfg);
+    probe.arm();
+
+    std::vector<float> in(144 * 2, 0.0f), out(144 * 2, 0.0f);
+    const FrameCount sizes[] = {144, 128, 144, 96};
+    int guard = 0, k = 0;
+    while (probe.state() != ProbeState::Done && guard++ < 100000)
+        probe.process(in.data(), out.data(), sizes[k++ % 4]);
+    CHECK(probe.state() == ProbeState::Done);
+}
+
+void testIdleAndDoneEmitSilence() {
+    SweepConfig cfg;
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 2, cfg);
+    std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 7.0f);
+    probe.process(in.data(), out.data(), 128);
+    for (float v : out) CHECK_NEAR(v, 0.0, 1e-9);
+}
+
 int main() {
     RUN(testSweepLengthAndBounds);
     RUN(testSweepFadesToZero);
     RUN(testSweepRisesInFrequency);
+    RUN(testStateMachineReachesDone);
+    RUN(testIrregularBlockSizes);
+    RUN(testIdleAndDoneEmitSilence);
     TEST_MAIN_END
 }
