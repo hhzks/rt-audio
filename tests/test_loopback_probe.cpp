@@ -27,8 +27,8 @@ void testSweepFadesToZero() {
     SweepConfig cfg;
     std::vector<float> s;
     generateSweep(cfg, 48000.0, s);
-    CHECK(std::fabs(s.front()) < 1e-4f);
-    CHECK(std::fabs(s.back())  < 1e-4f);
+    CHECK(std::fabs(s.front()) < 1e-9f);
+    CHECK(std::fabs(s.back())  < 1e-9f);
 }
 
 void testSweepRisesInFrequency() {

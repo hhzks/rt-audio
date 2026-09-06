@@ -23,7 +23,7 @@ void generateSweep(const SweepConfig& cfg, double sampleRate, std::vector<float>
                 w = 0.5 * (1.0 - std::cos(std::numbers::pi * static_cast<double>(i)
                                           / static_cast<double>(fade)));
             else if (i + fade >= n)
-                w = 0.5 * (1.0 - std::cos(std::numbers::pi * static_cast<double>(n - i)
+                w = 0.5 * (1.0 - std::cos(std::numbers::pi * static_cast<double>(n - 1 - i)
                                           / static_cast<double>(fade)));
         }
         out[i] = static_cast<float>(static_cast<double>(cfg.amplitude) * std::sin(phase) * w);
