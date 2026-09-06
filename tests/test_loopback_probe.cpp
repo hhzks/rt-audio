@@ -2,6 +2,7 @@
 #include "engine/LatencyAnalyzer.h"
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -103,25 +104,33 @@ void testIrregularBlockSizes() {
     CHECK(probe.state() == ProbeState::Done);
 }
 
-void testProbeAndAnalyzerAgreeOnKnownDelay() {
+void runLoopbackAndCheck(const FrameCount* sizes, int nsizes) {
     SweepConfig cfg;
     cfg.seconds = 0.1; cfg.primeSeconds = 0.02;
     cfg.maxLatencySeconds = 0.05; cfg.tailSeconds = 0.02;
 
     constexpr int D = 512;
     LoopbackProbe probe;
-    probe.prepare(48000.0, 128, 2, cfg);
+    probe.prepare(48000.0, 144, 2, cfg);
     probe.arm();
 
     DelayLine loop(D, 2);
-    std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 0.0f);
-    int guard = 0;
+    std::vector<float> in(144 * 2, 0.0f), out(144 * 2, 0.0f);
+    int guard = 0, k = 0, stereoChecked = 0;
     while (probe.state() != ProbeState::Done && guard++ < 100000) {
-        loop.read(in.data(), 128);
-        probe.process(in.data(), out.data(), 128);
-        loop.write(out.data(), 128);
+        const FrameCount n = sizes[idx(k++ % nsizes)];
+        loop.read(in.data(), n);
+        probe.process(in.data(), out.data(), n);
+        for (FrameCount f = 0; f < n; ++f) {
+            if (std::fabs(out[idx(f) * 2]) > 0.01f) {
+                CHECK_NEAR(out[idx(f) * 2 + 1], out[idx(f) * 2], 1e-9);
+                ++stereoChecked;
+            }
+        }
+        loop.write(out.data(), n);
     }
     CHECK(probe.state() == ProbeState::Done);
+    CHECK(stereoChecked > 1000);
 
     const auto r = analyzeLatency(probe.reference(), probe.captured(),
                                   static_cast<int>(cfg.maxLatencySeconds * 48000.0), 48000.0);
@@ -129,11 +138,54 @@ void testProbeAndAnalyzerAgreeOnKnownDelay() {
     CHECK_NEAR(r.lagFrames, D, 0.5);
 }
 
+void testProbeAndAnalyzerAgreeOnKnownDelay() {
+    const FrameCount sizes[] = {128};
+    runLoopbackAndCheck(sizes, 1);
+}
+
+void testProbeAndAnalyzerAgreeUnderIrregularBlocks() {
+    const FrameCount sizes[] = {144, 128, 144, 96};
+    runLoopbackAndCheck(sizes, 4);
+}
+
+void testShortSweepStillFadesOut() {
+    for (double sec : {0.005, 0.008}) {
+        SweepConfig cfg;
+        cfg.seconds = sec;
+        std::vector<float> s;
+        generateSweep(cfg, 48000.0, s);
+        CHECK(s.size() == static_cast<std::size_t>(sec * 48000.0));
+        CHECK(std::fabs(s.front()) < 1e-9f);
+        CHECK(std::fabs(s.back())  < 1e-9f);
+    }
+}
+
+void testDegenerateSweepConfigProducesNothing() {
+    const double los[] = {0.0, 1000.0, -200.0};
+    const double his[] = {10000.0, 1000.0, 10000.0};
+    for (int i = 0; i < 3; ++i) {
+        SweepConfig cfg;
+        cfg.loHz = los[idx(i)]; cfg.hiHz = his[idx(i)];
+        std::vector<float> s;
+        generateSweep(cfg, 48000.0, s);
+        CHECK(s.empty());
+    }
+}
+
 void testIdleAndDoneEmitSilence() {
     SweepConfig cfg;
     LoopbackProbe probe;
     probe.prepare(48000.0, 128, 2, cfg);
     std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 7.0f);
+    probe.process(in.data(), out.data(), 128);
+    for (float v : out) CHECK_NEAR(v, 0.0, 1e-9);
+
+    probe.arm();
+    int guard = 0;
+    while (probe.state() != ProbeState::Done && guard++ < 100000)
+        probe.process(in.data(), out.data(), 128);
+    CHECK(probe.state() == ProbeState::Done);
+    std::fill(out.begin(), out.end(), 7.0f);
     probe.process(in.data(), out.data(), 128);
     for (float v : out) CHECK_NEAR(v, 0.0, 1e-9);
 }
@@ -146,5 +198,8 @@ int main() {
     RUN(testIrregularBlockSizes);
     RUN(testIdleAndDoneEmitSilence);
     RUN(testProbeAndAnalyzerAgreeOnKnownDelay);
+    RUN(testProbeAndAnalyzerAgreeUnderIrregularBlocks);
+    RUN(testShortSweepStillFadesOut);
+    RUN(testDegenerateSweepConfigProducesNothing);
     TEST_MAIN_END
 }

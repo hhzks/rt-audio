@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -65,6 +66,7 @@ void printUsage() {
         "  --max-latency-ms <ms>     lag search bound (default: 200)\n"
         "  --expect-silence          negative control: a detected peak is a FAILURE\n"
         "  --skip-chain              measure device RTT only, skip phase B\n"
+        "  --control-verified        assert --expect-silence has PASSed on this rig\n"
         "  --json <path>             machine-readable result\n"
         "  --save-capture <path>     dump the last captured sweep as WAV\n"
         "  --help\n";
@@ -231,6 +233,15 @@ private:
     float gate_, mix_, drive_;
 };
 
+double parseNumber(const std::string& flag, const std::string& v) {
+    try {
+        std::size_t pos = 0;
+        const double d = std::stod(v, &pos);
+        if (pos == v.size() && std::isfinite(d)) return d;
+    } catch (const std::exception&) {}
+    throw std::runtime_error(flag + " expects a number, got \'" + v + "\'");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -239,36 +250,56 @@ int main(int argc, char** argv) {
     double sampleRate = 48000.0;
     FrameCount blockFrames = 0;
     bool exclusive = false, listOnly = false, expectSilence = false, skipChain = false;
+    bool controlVerified = false;
     int repeats = 5;
     SweepConfig sweepCfg;
     double maxLatencyMs = 200.0;
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : std::string{}; };
+    try {
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+            auto next = [&]() -> std::string {
+                if (i + 1 >= argc) throw std::runtime_error(arg + " expects a value");
+                return argv[++i];
+            };
+            auto num = [&]() { return parseNumber(arg, next()); };
 
-        if      (arg == "--list")           listOnly = true;
-        else if (arg == "--in")             inId = next();
-        else if (arg == "--out")            outId = next();
-        else if (arg == "--backend")        backend = parseBackend(next());
-        else if (arg == "--rate")           sampleRate = std::stod(next());
-        else if (arg == "--block")          blockFrames = std::stoi(next());
-        else if (arg == "--exclusive")      exclusive = true;
-        else if (arg == "--repeats")        repeats = std::stoi(next());
-        else if (arg == "--sweep-ms")       sweepCfg.seconds = std::stod(next()) / 1000.0;
-        else if (arg == "--sweep-lo")       sweepCfg.loHz = std::stod(next());
-        else if (arg == "--sweep-hi")       sweepCfg.hiHz = std::stod(next());
-        else if (arg == "--amplitude")      sweepCfg.amplitude = std::stof(next());
-        else if (arg == "--max-latency-ms") maxLatencyMs = std::stod(next());
-        else if (arg == "--expect-silence") expectSilence = true;
-        else if (arg == "--skip-chain")     skipChain = true;
-        else if (arg == "--json")           jsonPath = next();
-        else if (arg == "--save-capture")   saveCapturePath = next();
-        else if (arg == "--help")           { printUsage(); return 0; }
-        else { std::cerr << "unknown argument: " << arg << "\n"; printUsage(); return 1; }
+            if      (arg == "--list")           listOnly = true;
+            else if (arg == "--in")             inId = next();
+            else if (arg == "--out")            outId = next();
+            else if (arg == "--backend")        backend = parseBackend(next());
+            else if (arg == "--rate")           sampleRate = num();
+            else if (arg == "--block")          blockFrames = static_cast<FrameCount>(num());
+            else if (arg == "--exclusive")      exclusive = true;
+            else if (arg == "--repeats")        repeats = static_cast<int>(num());
+            else if (arg == "--sweep-ms")       sweepCfg.seconds = num() / 1000.0;
+            else if (arg == "--sweep-lo")       sweepCfg.loHz = num();
+            else if (arg == "--sweep-hi")       sweepCfg.hiHz = num();
+            else if (arg == "--amplitude")      sweepCfg.amplitude = static_cast<float>(num());
+            else if (arg == "--max-latency-ms") maxLatencyMs = num();
+            else if (arg == "--expect-silence") expectSilence = true;
+            else if (arg == "--skip-chain")     skipChain = true;
+            else if (arg == "--control-verified") controlVerified = true;
+            else if (arg == "--json")           jsonPath = next();
+            else if (arg == "--save-capture")   saveCapturePath = next();
+            else if (arg == "--help")           { printUsage(); return 0; }
+            else { std::cerr << "unknown argument: " << arg << "\n"; printUsage(); return 1; }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        printUsage();
+        return 1;
     }
 
     sweepCfg.maxLatencySeconds = maxLatencyMs / 1000.0;
+
+    if (!listOnly && !expectSilence && !controlVerified) {
+        std::cerr << "error: negative control not verified.\n"
+                  << "       Break the physical path (unplug the earbud) and run the same\n"
+                  << "       command with --expect-silence. Once it reports PASS, re-run\n"
+                  << "       with --control-verified.\n";
+        return 2;
+    }
 
     try {
         auto device = createAudioDevice(backend);
@@ -316,6 +347,11 @@ int main(int argc, char** argv) {
         const auto st = device->status();
 
         probe.prepare(st.sampleRate, st.blockFrames, st.numChannels, sweepCfg);
+        if (probe.reference().empty()) {
+            std::cerr << "error: invalid sweep configuration -- --sweep-lo and --sweep-hi "
+                         "must be positive and different, --sweep-ms positive.\n";
+            return 1;
+        }
         const auto maxLagFrames = static_cast<int>(sweepCfg.maxLatencySeconds * st.sampleRate);
 
         std::cout << "device       : in \"" << inName << "\"  out \"" << outName << "\"\n"
@@ -347,8 +383,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        std::cout << "neg. control : not verified this run "
-                     "-- run once with --exclusive --expect-silence before trusting this number\n";
+        std::cout << "neg. control : asserted by operator (--control-verified)\n";
 
         if (!phaseA.passedMajority()) {
             std::cerr << "\nerror: measurement rejected -- " << phaseA.kept.size()
