@@ -28,7 +28,7 @@ public:
     void arm() noexcept;
     void process(const float* in, float* out, FrameCount numFrames) noexcept;
 
-    ProbeState state() const noexcept { return state_.load(std::memory_order_relaxed); }
+    ProbeState state() const noexcept { return state_.load(std::memory_order_acquire); }
     std::span<const float> reference() const noexcept { return sweep_; }
     std::span<const float> captured()  const noexcept { return capture_; }
 

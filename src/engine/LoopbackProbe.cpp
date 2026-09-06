@@ -42,14 +42,14 @@ void LoopbackProbe::prepare(double sampleRate, FrameCount maxBlockFrames,
     numChannels_    = numChannels;
     maxBlockFrames_ = maxBlockFrames;
     prepared_       = true;
-    state_.store(ProbeState::Idle, std::memory_order_relaxed);
+    state_.store(ProbeState::Idle, std::memory_order_release);
 }
 
 void LoopbackProbe::arm() noexcept {
     sweepPos_ = capturePos_ = 0;
     primeRemaining_ = primeFrames_;
     std::fill(capture_.begin(), capture_.end(), 0.0f);
-    state_.store(ProbeState::Priming, std::memory_order_relaxed);
+    state_.store(ProbeState::Priming, std::memory_order_release);
 }
 
 void LoopbackProbe::process(const float* in, float* out, FrameCount numFrames) noexcept {
@@ -60,7 +60,7 @@ void LoopbackProbe::process(const float* in, float* out, FrameCount numFrames) n
 
     std::size_t f = 0;
     while (f < n) {
-        switch (state_.load(std::memory_order_relaxed)) {
+        switch (state_.load(std::memory_order_acquire)) {
         case ProbeState::Idle:
         case ProbeState::Done:
             return;
@@ -70,7 +70,7 @@ void LoopbackProbe::process(const float* in, float* out, FrameCount numFrames) n
             primeRemaining_ -= take;
             f += take;
             if (primeRemaining_ == 0)
-                state_.store(ProbeState::Emitting, std::memory_order_relaxed);
+                state_.store(ProbeState::Emitting, std::memory_order_release);
             break;
         }
 
@@ -87,7 +87,7 @@ void LoopbackProbe::process(const float* in, float* out, FrameCount numFrames) n
             capturePos_ += take;
             f           += take;
             if (sweepPos_ == sweep_.size())
-                state_.store(ProbeState::Trailing, std::memory_order_relaxed);
+                state_.store(ProbeState::Trailing, std::memory_order_release);
             else if (take == 0) return;
             break;
         }
@@ -99,7 +99,7 @@ void LoopbackProbe::process(const float* in, float* out, FrameCount numFrames) n
             capturePos_ += take;
             f           += take;
             if (capturePos_ == capture_.size())
-                state_.store(ProbeState::Done, std::memory_order_relaxed);
+                state_.store(ProbeState::Done, std::memory_order_release);
             else if (take == 0) return;
             break;
         }
