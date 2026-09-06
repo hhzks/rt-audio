@@ -32,6 +32,8 @@ void testCleanDelayRecovered() {
         CHECK(r.valid);
         CHECK_NEAR(r.lagFrames, D, 0.5);
         CHECK(!r.polarityInverted);
+        CHECK(r.peakCorrelation > 0.99);
+        CHECK(r.peakCorrelation < 1.001);
     }
 }
 
@@ -42,6 +44,8 @@ void testAttenuationDoesNotMatter() {
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
     CHECK_NEAR(r.lagFrames, 512, 0.5);
+    CHECK(r.peakCorrelation > 0.99);
+    CHECK(r.peakCorrelation < 1.001);
 }
 
 void testPolarityInversionDetected() {
