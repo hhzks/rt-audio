@@ -89,7 +89,7 @@ void testHalfSampleDelay() {
     const auto whole = delayedCopy(ref, 512);
     std::vector<float> cap(whole.size(), 0.0f);
     for (std::size_t i = 1; i < whole.size(); ++i)
-        cap[i] = 0.5f * (whole[i] + whole[i - 1]);      // exact half-sample group delay
+        cap[i] = 0.5f * (whole[i] + whole[i - 1]);
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
     CHECK_NEAR(r.lagFrames, 512.5, 0.25);
@@ -106,7 +106,7 @@ void testBandlimitedStillDetected() {
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
     CHECK(r.lagFrames >= 512.0);
-    CHECK(r.lagFrames <  532.0);        // IIR group delay shifts the peak slightly
+    CHECK(r.lagFrames <  520.0);
 }
 
 void testPureNoiseRejected() {
