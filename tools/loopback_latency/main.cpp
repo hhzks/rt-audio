@@ -144,6 +144,7 @@ struct PhaseResult {
     std::vector<LatencyResult> kept;
     bool anyClipped = false;
     int  discarded  = 0;
+    int  requested  = 0;
 
     int validCount() const {
         int n = 0;
@@ -155,13 +156,16 @@ struct PhaseResult {
         return false;
     }
     bool passedMajority() const {
-        return !kept.empty() && validCount() * 2 > static_cast<int>(kept.size());
+        if (kept.empty()) return false;
+        if (static_cast<int>(kept.size()) < std::min(3, requested)) return false;
+        return validCount() * 2 > static_cast<int>(kept.size());
     }
 };
 
 PhaseResult runPhase(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
                       int repeats, int maxLagFrames, double sampleRate, const char* label) {
     PhaseResult phase;
+    phase.requested = repeats;
     for (int i = 0; i < repeats; ++i) {
         SweepAttempt attempt;
         int extra = 0;
@@ -200,6 +204,13 @@ void printRepeats(const std::vector<LatencyResult>& results) {
         std::cout << "\n";
     }
 }
+
+struct StopGuard {
+    explicit StopGuard(IAudioDevice& device) : device_(device) {}
+    ~StopGuard() { device_.stop(); }
+private:
+    IAudioDevice& device_;
+};
 
 struct ParamRestorer {
     explicit ParamRestorer(ParameterStore& params)
@@ -311,10 +322,14 @@ int main(int argc, char** argv) {
                   << "               " << st.backendName << ", " << st.sampleRate << " Hz, "
                   << st.blockFrames << " frames\n";
 
-        device->start();
-        PhaseResult phaseA = runPhase(*device, probe, nullptr, repeats, maxLagFrames,
-                                      st.sampleRate, "direct");
-        device->stop();
+        PhaseResult phaseA;
+        {
+            device->start();
+            StopGuard stopGuard(*device);
+            phaseA = runPhase(*device, probe, nullptr, repeats, maxLagFrames,
+                              st.sampleRate, "direct");
+            device->stop();
+        }
 
         if (expectSilence) {
             if (phaseA.anyValid()) {
@@ -336,8 +351,10 @@ int main(int argc, char** argv) {
                      "-- run once with --exclusive --expect-silence before trusting this number\n";
 
         if (!phaseA.passedMajority()) {
-            std::cerr << "\nerror: measurement rejected -- fewer than half of "
-                      << phaseA.kept.size() << " completed repeats found a valid peak.\n";
+            std::cerr << "\nerror: measurement rejected -- " << phaseA.kept.size()
+                      << " of " << repeats << " requested repeats survived ("
+                      << phaseA.discarded << " discarded to xruns), "
+                      << phaseA.validCount() << " of which found a valid peak.\n";
             if (!phaseA.kept.empty() && !phaseA.kept.back().rejectReason.empty())
                 std::cerr << "       last reject reason: " << phaseA.kept.back().rejectReason << "\n";
             std::cerr << "       hints: raise --amplitude, disable direct monitoring in RODE "
@@ -401,6 +418,7 @@ int main(int argc, char** argv) {
 
                 callback.setEngine(&engine);
                 device->start();
+                StopGuard stopGuard(*device);
                 phaseB = runPhase(*device, probe, &engine, repeats, maxLagFrames,
                                   st.sampleRate, "chain");
                 device->stop();
