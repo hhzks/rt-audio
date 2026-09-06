@@ -38,7 +38,7 @@ void testSweepRisesInFrequency() {
     const std::size_t tenth = s.size() / 10;
     const int early = zeroCrossings(s, tenth, 2 * tenth);
     const int late  = zeroCrossings(s, 8 * tenth, 9 * tenth);
-    CHECK(late > early * 4);
+    CHECK(late > early * 10);
 }
 
 int main() {
