@@ -45,6 +45,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> threadReady_{false};
     std::atomic<bool> schedElevated_{false};
+    std::atomic<bool> ready_{false};
     std::atomic<std::uint64_t> captureOverruns_{0};
     std::atomic<std::uint64_t> xruns_{0};
 

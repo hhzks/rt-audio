@@ -115,13 +115,10 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     snd_pcm_get_params(render_,  &renBuf, &renPeriod);
 
     const auto period = static_cast<FrameCount>(std::min(capPeriod, renPeriod));
-    if (period <= 0 || period > kMaxBlockFrames) {
-        snd_pcm_close(capture_); capture_ = nullptr;
-        snd_pcm_close(render_);  render_  = nullptr;
+    if (period <= 0 || period > kMaxBlockFrames)
         throw std::runtime_error("ALSA granted a period of " + std::to_string(period)
                                  + " frames, outside the engine limit of 1..."
                                  + std::to_string(kMaxBlockFrames));
-    }
 
     const auto maxBlock  = idx(period);
     const auto engineCh  = idx(config_.numChannels);
@@ -147,10 +144,12 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     status_.estimatedRoundTripMs =
         1000.0 * static_cast<double>(capBuf + renBuf) / config_.sampleRate
       + 1000.0 * AsyncResampler::latencyFrames() / config_.sampleRate;
+
+    ready_.store(true, std::memory_order_release);
 }
 
 void AlsaDevice::start() {
-    if (capture_ == nullptr || render_ == nullptr)
+    if (!ready_.load(std::memory_order_acquire))
         throw std::runtime_error("AlsaDevice::start: device not open");
     if (thread_.joinable()) stop();
 
@@ -169,6 +168,7 @@ void AlsaDevice::stop() {
 }
 
 void AlsaDevice::close() {
+    ready_.store(false, std::memory_order_release);
     stop();
     if (capture_ != nullptr) { snd_pcm_close(capture_); capture_ = nullptr; }
     if (render_  != nullptr) { snd_pcm_close(render_);  render_  = nullptr; }
@@ -225,11 +225,15 @@ void AlsaDevice::threadMain() {
     const FrameCount period = status_.blockFrames;
     const auto uperiod = static_cast<snd_pcm_uframes_t>(period);
 
-    std::fill(engineOut_.begin(), engineOut_.end(), 0.0f);
-    snd_pcm_writei(render_, engineOut_.data(), uperiod);
-    if (snd_pcm_state(render_) == SND_PCM_STATE_PREPARED) snd_pcm_start(render_);
+    const bool prepared = snd_pcm_prepare(capture_) >= 0 && snd_pcm_prepare(render_) >= 0;
 
-    while (running_.load(std::memory_order_acquire)) {
+    if (prepared) {
+        std::fill(engineOut_.begin(), engineOut_.end(), 0.0f);
+        snd_pcm_writei(render_, engineOut_.data(), uperiod);
+        if (snd_pcm_state(render_) == SND_PCM_STATE_PREPARED) snd_pcm_start(render_);
+    }
+
+    while (prepared && running_.load(std::memory_order_acquire)) {
         const snd_pcm_sframes_t r = snd_pcm_readi(capture_, captureScratch_.data(), uperiod);
         if (r < 0) {
             if (!handleTransfer(capture_, static_cast<int>(r))) break;
