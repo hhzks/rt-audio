@@ -37,6 +37,7 @@ private:
 
     snd_pcm_t* capture_ = nullptr;
     snd_pcm_t* render_  = nullptr;
+    snd_pcm_uframes_t renderBufferFrames_ = 0;
 
     IAudioCallback*   callback_ = nullptr;
     DeviceConfig      config_{};
@@ -48,6 +49,7 @@ private:
     std::atomic<bool> ready_{false};
     std::atomic<std::uint64_t> captureOverruns_{0};
     std::atomic<std::uint64_t> xruns_{0};
+    std::atomic<int>           lastErr_{0};
 
     SpscRingBuffer     captureRing_;
     std::vector<float> engineIn_, engineOut_, captureScratch_, resampleScratch_;

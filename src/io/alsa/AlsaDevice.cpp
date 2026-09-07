@@ -71,8 +71,10 @@ void AlsaDevice::openStream(snd_pcm_t*& pcm, const char* name,
     if (err < 0) {
         std::string msg = std::string("snd_pcm_open(\"") + name + "\"): " + snd_strerror(err);
         if (err == -ENOENT)
-            msg += "\nNo such PCM. On a system with no sound card (WSL2, containers), "
-                   "install libasound2-plugins and add to /etc/asound.conf:\n"
+            msg += "\nNo such PCM. Run --list to see available PCM names -- --in/--out "
+                   "take a raw PCM name, so a typo there is the likely cause. On a system "
+                   "with no sound card (WSL2, containers), install libasound2-plugins and "
+                   "add to /etc/asound.conf:\n"
                    "  pcm.!default { type pulse }\n  ctl.!default { type pulse }";
         if (err == -EBUSY)
             msg += "\nDevice is held exclusively. A sound server (PipeWire/PulseAudio) "
@@ -94,6 +96,15 @@ void AlsaDevice::openStream(snd_pcm_t*& pcm, const char* name,
 
 void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     if (callback == nullptr) throw std::invalid_argument("AlsaDevice::open: null callback");
+    if (!(config.sampleRate >= 8000.0 && config.sampleRate <= 768000.0))
+        throw std::invalid_argument("AlsaDevice::open: sampleRate " +
+                                    std::to_string(config.sampleRate) +
+                                    " outside the supported 8000..768000 Hz range");
+    if (config.numChannels < 1 || config.numChannels > kMaxChannels)
+        throw std::invalid_argument("AlsaDevice::open: numChannels " +
+                                    std::to_string(config.numChannels) +
+                                    " outside the supported 1.." +
+                                    std::to_string(kMaxChannels) + " range");
     close();
 
     config_   = config;
@@ -119,6 +130,8 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
         throw std::runtime_error("ALSA granted a period of " + std::to_string(period)
                                  + " frames, outside the engine limit of 1..."
                                  + std::to_string(kMaxBlockFrames));
+
+    renderBufferFrames_ = renBuf;
 
     const auto maxBlock  = idx(period);
     const auto engineCh  = idx(config_.numChannels);
@@ -149,22 +162,36 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
 }
 
 void AlsaDevice::start() {
+    if (running_.load(std::memory_order_acquire)) return;
+    if (thread_.joinable()) stop();
+
     if (!ready_.load(std::memory_order_acquire))
         throw std::runtime_error("AlsaDevice::start: device not open");
-    if (thread_.joinable()) stop();
 
     threadReady_.store(false, std::memory_order_relaxed);
     running_.store(true, std::memory_order_release);
     thread_ = std::thread(&AlsaDevice::threadMain, this);
 
-    for (int i = 0; i < 100 && !threadReady_.load(std::memory_order_acquire); ++i)
+    for (int i = 0; i < 100 && !threadReady_.load(std::memory_order_acquire); ++i) {
+        if (!running_.load(std::memory_order_acquire)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (!running_.load(std::memory_order_acquire)) {
+        if (thread_.joinable()) thread_.join();
+        threadReady_.store(false, std::memory_order_relaxed);
+        throw std::runtime_error("AlsaDevice::start: audio thread exited immediately "
+                                 "(snd_pcm_prepare failed -- device disconnected, in an "
+                                 "unexpected state, or held by another process)");
+    }
 }
 
 void AlsaDevice::stop() {
     running_.store(false, std::memory_order_release);
     if (capture_ != nullptr) snd_pcm_drop(capture_);
+    if (render_  != nullptr) snd_pcm_drop(render_);
     if (thread_.joinable()) thread_.join();
+    threadReady_.store(false, std::memory_order_relaxed);
 }
 
 void AlsaDevice::close() {
@@ -182,10 +209,13 @@ DeviceStatus AlsaDevice::status() const {
     if (threadReady_.load(std::memory_order_acquire))
         s.backendName = schedElevated_.load(std::memory_order_relaxed)
                       ? "ALSA (SCHED_FIFO)" : "ALSA (normal priority)";
+    const int err = lastErr_.load(std::memory_order_relaxed);
+    if (err != 0) s.lastError = std::string("ALSA transfer failed: ") + snd_strerror(err);
     return s;
 }
 
 bool AlsaDevice::handleTransfer(snd_pcm_t* pcm, int err) noexcept {
+    if (!running_.load(std::memory_order_acquire)) return false;
     switch (alsaActionFor(err)) {
     case AlsaAction::None:
     case AlsaAction::Retry:
@@ -194,6 +224,7 @@ bool AlsaDevice::handleTransfer(snd_pcm_t* pcm, int err) noexcept {
         xruns_.fetch_add(1, std::memory_order_relaxed);
         return snd_pcm_recover(pcm, err, 1) >= 0;
     case AlsaAction::Fail:
+        lastErr_.store(err, std::memory_order_relaxed);
         return false;
     }
     return false;
@@ -220,17 +251,26 @@ void AlsaDevice::fillRender(FrameCount frames) noexcept {
 void AlsaDevice::threadMain() {
     RtSchedScope sched;
     schedElevated_.store(sched.ok(), std::memory_order_relaxed);
-    threadReady_.store(true, std::memory_order_release);
 
     const FrameCount period = status_.blockFrames;
     const auto uperiod = static_cast<snd_pcm_uframes_t>(period);
 
-    const bool prepared = snd_pcm_prepare(capture_) >= 0 && snd_pcm_prepare(render_) >= 0;
+    bool prepared = snd_pcm_prepare(capture_) >= 0 && snd_pcm_prepare(render_) >= 0;
+    threadReady_.store(true, std::memory_order_release);
 
     if (prepared) {
         std::fill(engineOut_.begin(), engineOut_.end(), 0.0f);
-        snd_pcm_writei(render_, engineOut_.data(), uperiod);
-        if (snd_pcm_state(render_) == SND_PCM_STATE_PREPARED) snd_pcm_start(render_);
+        snd_pcm_uframes_t queued = 0;
+        while (prepared && queued < renderBufferFrames_) {
+            const auto chunk = std::min<snd_pcm_uframes_t>(uperiod, renderBufferFrames_ - queued);
+            const snd_pcm_sframes_t w = snd_pcm_writei(render_, engineOut_.data(), chunk);
+            if (w < 0) {
+                if (!handleTransfer(render_, static_cast<int>(w))) { prepared = false; break; }
+                continue;
+            }
+            queued += static_cast<snd_pcm_uframes_t>(w);
+        }
+        if (prepared && snd_pcm_state(render_) == SND_PCM_STATE_PREPARED) snd_pcm_start(render_);
     }
 
     while (prepared && running_.load(std::memory_order_acquire)) {

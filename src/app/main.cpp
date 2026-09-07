@@ -44,6 +44,8 @@ void printUsage() {
         "  --backend <name>       wasapi | asio | alsa | null   (default: platform default)\n"
         "  --block <frames>       requested block size (default: driver minimum)\n"
         "  --rate <hz>            requested sample rate (default: 48000)\n"
+        "  --in <id>              capture device id (default: system default)\n"
+        "  --out <id>             render device id (default: system default)\n"
         "  --exclusive            WASAPI exclusive mode\n"
         "  --drive <x>            distortion drive, 1.0 = clean (default: 1.0)\n"
         "  --mix <0..1>           distortion dry/wet (default: 0.0)\n"
