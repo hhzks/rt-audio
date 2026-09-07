@@ -1,6 +1,10 @@
 #include "io/alsa/AlsaDevice.h"
 #ifdef RT_HAVE_ALSA
 
+#include "io/alsa/RtSchedScope.h"
+
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -59,16 +63,134 @@ std::vector<DeviceInfo> AlsaDevice::enumerate() {
     return devices;
 }
 
-void AlsaDevice::open(const DeviceConfig&, IAudioCallback*) {
-    throw std::runtime_error("AlsaDevice::open not implemented yet");
-}
-void AlsaDevice::start() { throw std::runtime_error("AlsaDevice::start not implemented yet"); }
-void AlsaDevice::stop()  {}
-void AlsaDevice::close() {}
-DeviceStatus AlsaDevice::status() const { return status_; }
+void AlsaDevice::openStream(snd_pcm_t*& pcm, const char* name,
+                            snd_pcm_stream_t dir, unsigned latencyUs) {
+    const int err = snd_pcm_open(&pcm, name, dir, 0);
+    if (err < 0) {
+        std::string msg = std::string("snd_pcm_open(\"") + name + "\"): " + snd_strerror(err);
+        if (err == -ENOENT)
+            msg += "\nNo such PCM. On a system with no sound card (WSL2, containers), "
+                   "install libasound2-plugins and add to /etc/asound.conf:\n"
+                   "  pcm.!default { type pulse }\n  ctl.!default { type pulse }";
+        if (err == -EBUSY)
+            msg += "\nDevice is held exclusively. A sound server (PipeWire/PulseAudio) "
+                   "may own it; try the \"default\" PCM instead of a hw: device.";
+        throw std::runtime_error(msg);
+    }
 
-void AlsaDevice::openStream(snd_pcm_t*&, const char*, snd_pcm_stream_t, unsigned) {}
-void AlsaDevice::threadMain() {}
+    const int perr = snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT_LE,
+                                        SND_PCM_ACCESS_RW_INTERLEAVED,
+                                        static_cast<unsigned>(config_.numChannels),
+                                        static_cast<unsigned>(config_.sampleRate),
+                                        1, latencyUs);
+    if (perr < 0)
+        throw std::runtime_error(std::string("snd_pcm_set_params(\"") + name + "\"): "
+                                 + snd_strerror(perr) + " -- requested "
+                                 + std::to_string(config_.numChannels) + "ch @ "
+                                 + std::to_string(config_.sampleRate) + " Hz");
+}
+
+void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
+    if (callback == nullptr) throw std::invalid_argument("AlsaDevice::open: null callback");
+    close();
+
+    config_   = config;
+    callback_ = callback;
+    if (config_.blockFrames <= 0) config_.blockFrames = 256;
+
+    // set_params derives period = buffer/4, so ask for 4 blocks of total latency
+    // to land on the requested period size.
+    const auto latencyUs = static_cast<unsigned>(
+        4.0 * 1e6 * config_.blockFrames / config_.sampleRate);
+
+    openStream(capture_, config_.inputId.empty()  ? "default" : config_.inputId.c_str(),
+               SND_PCM_STREAM_CAPTURE, latencyUs);
+    openStream(render_, config_.outputId.empty() ? "default" : config_.outputId.c_str(),
+               SND_PCM_STREAM_PLAYBACK, latencyUs);
+
+    snd_pcm_uframes_t capBuf = 0, capPeriod = 0, renBuf = 0, renPeriod = 0;
+    snd_pcm_get_params(capture_, &capBuf, &capPeriod);
+    snd_pcm_get_params(render_,  &renBuf, &renPeriod);
+
+    const auto period = static_cast<FrameCount>(std::min(capPeriod, renPeriod));
+    if (period <= 0 || period > kMaxBlockFrames)
+        throw std::runtime_error("ALSA granted a period of " + std::to_string(period)
+                                 + " frames, outside the engine limit of 1..."
+                                 + std::to_string(kMaxBlockFrames));
+
+    const auto maxBlock  = idx(period);
+    const auto engineCh  = idx(config_.numChannels);
+
+    nominalRatio_ = 1.0;
+    captureRing_.reset(maxBlock * engineCh * 4);
+    resampler_.prepare(config_.numChannels, nominalRatio_);
+    drift_.prepare(captureRing_.capacity() / 2, 0.002);
+
+    engineIn_.assign(maxBlock * engineCh, 0.0f);
+    engineOut_.assign(maxBlock * engineCh, 0.0f);
+    captureScratch_.assign(maxBlock * engineCh, 0.0f);
+    resampleScratch_.assign(
+        idx(AsyncResampler::maxOutputFor(period, nominalRatio_)) * engineCh, 0.0f);
+
+    status_ = DeviceStatus{};
+    status_.sampleRate  = config_.sampleRate;
+    status_.blockFrames = period;
+    status_.numChannels = config_.numChannels;
+    status_.backendName = "ALSA";
+    status_.inputName   = config_.inputId.empty()  ? "default" : config_.inputId;
+    status_.outputName  = config_.outputId.empty() ? "default" : config_.outputId;
+    status_.estimatedRoundTripMs =
+        1000.0 * static_cast<double>(capBuf + renBuf) / config_.sampleRate
+      + 1000.0 * AsyncResampler::latencyFrames() / config_.sampleRate;
+}
+
+void AlsaDevice::start() {
+    if (capture_ == nullptr || render_ == nullptr)
+        throw std::runtime_error("AlsaDevice::start: device not open");
+    if (thread_.joinable()) stop();
+
+    threadReady_.store(false, std::memory_order_relaxed);
+    running_.store(true, std::memory_order_release);
+    thread_ = std::thread(&AlsaDevice::threadMain, this);
+
+    for (int i = 0; i < 100 && !threadReady_.load(std::memory_order_acquire); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
+void AlsaDevice::stop() {
+    running_.store(false, std::memory_order_release);
+    if (capture_ != nullptr) snd_pcm_drop(capture_);
+    if (thread_.joinable()) thread_.join();
+}
+
+void AlsaDevice::close() {
+    stop();
+    if (capture_ != nullptr) { snd_pcm_close(capture_); capture_ = nullptr; }
+    if (render_  != nullptr) { snd_pcm_close(render_);  render_  = nullptr; }
+    callback_ = nullptr;
+}
+
+DeviceStatus AlsaDevice::status() const {
+    DeviceStatus s = status_;
+    s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
+    s.xruns = xruns_.load(std::memory_order_relaxed);
+    if (threadReady_.load(std::memory_order_acquire))
+        s.backendName = schedElevated_.load(std::memory_order_relaxed)
+                      ? "ALSA (SCHED_FIFO)" : "ALSA (normal priority)";
+    return s;
+}
+
+void AlsaDevice::threadMain() {
+    RtSchedScope sched;
+    schedElevated_.store(sched.ok(), std::memory_order_relaxed);
+    threadReady_.store(true, std::memory_order_release);
+
+    while (running_.load(std::memory_order_acquire))
+        snd_pcm_wait(capture_, 100);
+
+    running_.store(false, std::memory_order_release);
+}
+
 void AlsaDevice::drainCapture(FrameCount) noexcept {}
 void AlsaDevice::fillRender(FrameCount) noexcept {}
 bool AlsaDevice::handleTransfer(snd_pcm_t*, int) noexcept { return false; }

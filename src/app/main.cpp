@@ -113,8 +113,11 @@ int main(int argc, char** argv) {
         EngineCallback callback(engine);
         device->open(config, &callback);
 
+        const auto opened = device->status();
+        engine.prepare(opened.sampleRate, opened.blockFrames, opened.numChannels);
+
+        device->start();
         const auto st = device->status();
-        engine.prepare(st.sampleRate, st.blockFrames, st.numChannels);
 
         std::cout << "backend      : " << st.backendName << "\n"
                   << "sample rate  : " << st.sampleRate << " Hz\n"
@@ -126,8 +129,6 @@ int main(int argc, char** argv) {
                   << "  (optimistic -- measure with loopback_latency)\n"
                   << "chain latency: " << engine.chain().totalLatencyFrames() << " frames\n\n"
                   << "running. press Enter to stop.\n\n";
-
-        device->start();
 
         std::atomic<bool> quit{false};
         HistogramSnapshot cumulative;

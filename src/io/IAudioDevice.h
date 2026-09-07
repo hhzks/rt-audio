@@ -44,6 +44,7 @@ struct DeviceStatus {
     std::string inputName, outputName;
 
     std::uint64_t captureOverruns = 0;   // ring-full events; not engine underruns
+    std::uint64_t xruns = 0;             // device-reported underrun/overrun recoveries
 };
 
 class IAudioDevice {
