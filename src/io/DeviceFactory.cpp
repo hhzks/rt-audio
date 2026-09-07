@@ -5,6 +5,9 @@
 #if defined(_WIN32)
   #include "io/wasapi/WasapiDevice.h"
 #endif
+#if defined(RT_HAVE_ALSA)
+  #include "io/alsa/AlsaDevice.h"
+#endif
 
 namespace rt {
 
@@ -23,6 +26,9 @@ std::vector<std::string> availableBackends() {
 #if defined(_WIN32)
     v.emplace_back("wasapi");
 #endif
+#if defined(RT_HAVE_ALSA)
+    v.emplace_back("alsa");
+#endif
     v.emplace_back("null");
     return v;
 }
@@ -38,9 +44,15 @@ std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend) {
             "ASIO backend not implemented. Steinberg's SDK cannot be redistributed; "
             "download it separately and add src/io/asio/AsioDevice.cpp.");
 #else
-    if (backend == Backend::Default) return std::make_unique<NullDevice>();
+  #if defined(RT_HAVE_ALSA)
+    if (backend == Backend::Default || backend == Backend::Alsa)
+        return std::make_unique<AlsaDevice>();
+  #else
     if (backend == Backend::Alsa)
-        throw std::runtime_error("ALSA backend not implemented yet -- see src/io/alsa/");
+        throw std::runtime_error(
+            "ALSA backend not compiled in. Install libasound2-dev and reconfigure.");
+    if (backend == Backend::Default) return std::make_unique<NullDevice>();
+  #endif
 #endif
 
     throw std::runtime_error(std::string("backend not available on this platform: ")
