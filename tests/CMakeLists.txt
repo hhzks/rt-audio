@@ -18,6 +18,7 @@ rt_add_test(test_drift_controller)
 rt_add_test(test_rt_histogram)
 rt_add_test(test_loopback_probe)
 rt_add_test(test_latency_analyzer)
+rt_add_test(test_alsa_error)
 
 if(UNIX)
     find_package(Threads REQUIRED)
