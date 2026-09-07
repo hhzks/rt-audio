@@ -2,6 +2,8 @@
 #ifdef RT_HAVE_ALSA
 
 #include "io/alsa/RtSchedScope.h"
+#include "io/alsa/AlsaError.h"
+#include "core/RingPush.h"
 
 #include <algorithm>
 #include <chrono>
@@ -113,10 +115,13 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     snd_pcm_get_params(render_,  &renBuf, &renPeriod);
 
     const auto period = static_cast<FrameCount>(std::min(capPeriod, renPeriod));
-    if (period <= 0 || period > kMaxBlockFrames)
+    if (period <= 0 || period > kMaxBlockFrames) {
+        snd_pcm_close(capture_); capture_ = nullptr;
+        snd_pcm_close(render_);  render_  = nullptr;
         throw std::runtime_error("ALSA granted a period of " + std::to_string(period)
                                  + " frames, outside the engine limit of 1..."
                                  + std::to_string(kMaxBlockFrames));
+    }
 
     const auto maxBlock  = idx(period);
     const auto engineCh  = idx(config_.numChannels);
@@ -180,20 +185,68 @@ DeviceStatus AlsaDevice::status() const {
     return s;
 }
 
+bool AlsaDevice::handleTransfer(snd_pcm_t* pcm, int err) noexcept {
+    switch (alsaActionFor(err)) {
+    case AlsaAction::None:
+    case AlsaAction::Retry:
+        return true;
+    case AlsaAction::Recover:
+        xruns_.fetch_add(1, std::memory_order_relaxed);
+        return snd_pcm_recover(pcm, err, 1) >= 0;
+    case AlsaAction::Fail:
+        return false;
+    }
+    return false;
+}
+
+void AlsaDevice::drainCapture(FrameCount frames) noexcept {
+    const std::size_t ch = idx(config_.numChannels);
+
+    resampler_.setRatio(nominalRatio_ * drift_.update(captureRing_.readAvailable()));
+
+    const FrameCount produced =
+        resampler_.process(captureScratch_.data(), frames, resampleScratch_.data(),
+                           static_cast<FrameCount>(resampleScratch_.size() / ch));
+
+    if (pushEvictingOldest(captureRing_, resampleScratch_.data(), idx(produced) * ch, ch))
+        captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AlsaDevice::fillRender(FrameCount frames) noexcept {
+    captureRing_.popOrZero(engineIn_.data(), idx(frames) * idx(config_.numChannels));
+    callback_->audioDeviceProcess(engineIn_.data(), engineOut_.data(), frames);
+}
+
 void AlsaDevice::threadMain() {
     RtSchedScope sched;
     schedElevated_.store(sched.ok(), std::memory_order_relaxed);
     threadReady_.store(true, std::memory_order_release);
 
-    while (running_.load(std::memory_order_acquire))
-        snd_pcm_wait(capture_, 100);
+    const FrameCount period = status_.blockFrames;
+    const auto uperiod = static_cast<snd_pcm_uframes_t>(period);
 
+    std::fill(engineOut_.begin(), engineOut_.end(), 0.0f);
+    snd_pcm_writei(render_, engineOut_.data(), uperiod);
+    if (snd_pcm_state(render_) == SND_PCM_STATE_PREPARED) snd_pcm_start(render_);
+
+    while (running_.load(std::memory_order_acquire)) {
+        const snd_pcm_sframes_t r = snd_pcm_readi(capture_, captureScratch_.data(), uperiod);
+        if (r < 0) {
+            if (!handleTransfer(capture_, static_cast<int>(r))) break;
+            continue;
+        }
+
+        drainCapture(static_cast<FrameCount>(r));
+        fillRender(period);
+
+        const snd_pcm_sframes_t w = snd_pcm_writei(render_, engineOut_.data(), uperiod);
+        if (w < 0 && !handleTransfer(render_, static_cast<int>(w))) break;
+    }
+
+    snd_pcm_drop(capture_);
+    snd_pcm_drop(render_);
     running_.store(false, std::memory_order_release);
 }
-
-void AlsaDevice::drainCapture(FrameCount) noexcept {}
-void AlsaDevice::fillRender(FrameCount) noexcept {}
-bool AlsaDevice::handleTransfer(snd_pcm_t*, int) noexcept { return false; }
 
 } // namespace rt
 #endif
