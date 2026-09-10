@@ -44,6 +44,8 @@ void printUsage() {
         "  --backend <name>       wasapi | asio | alsa | null   (default: platform default)\n"
         "  --block <frames>       requested block size (default: driver minimum)\n"
         "  --rate <hz>            requested sample rate (default: 48000)\n"
+        "  --in <id>              capture device id (default: system default)\n"
+        "  --out <id>             render device id (default: system default)\n"
         "  --exclusive            WASAPI exclusive mode\n"
         "  --drive <x>            distortion drive, 1.0 = clean (default: 1.0)\n"
         "  --mix <0..1>           distortion dry/wet (default: 0.0)\n"
@@ -113,8 +115,11 @@ int main(int argc, char** argv) {
         EngineCallback callback(engine);
         device->open(config, &callback);
 
+        const auto opened = device->status();
+        engine.prepare(opened.sampleRate, opened.blockFrames, opened.numChannels);
+
+        device->start();
         const auto st = device->status();
-        engine.prepare(st.sampleRate, st.blockFrames, st.numChannels);
 
         std::cout << "backend      : " << st.backendName << "\n"
                   << "sample rate  : " << st.sampleRate << " Hz\n"
@@ -126,8 +131,6 @@ int main(int argc, char** argv) {
                   << "  (optimistic -- measure with loopback_latency)\n"
                   << "chain latency: " << engine.chain().totalLatencyFrames() << " frames\n\n"
                   << "running. press Enter to stop.\n\n";
-
-        device->start();
 
         std::atomic<bool> quit{false};
         HistogramSnapshot cumulative;

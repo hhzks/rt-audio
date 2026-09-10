@@ -44,6 +44,7 @@ private:
 
 Backend parseBackend(const std::string& s) {
     if (s == "wasapi") return Backend::Wasapi;
+    if (s == "alsa")   return Backend::Alsa;
     if (s == "null")   return Backend::Null;
     return Backend::Default;
 }
@@ -54,7 +55,7 @@ void printUsage() {
         "  --list                    enumerate devices and exit\n"
         "  --in <id>                 capture device id      (REQUIRED)\n"
         "  --out <id>                render device id       (REQUIRED)\n"
-        "  --backend <name>          wasapi | null   (default: platform default)\n"
+        "  --backend <name>          wasapi | alsa | null   (default: platform default)\n"
         "  --rate <hz>               requested sample rate (default: 48000)\n"
         "  --block <frames>          requested block size (default: driver minimum)\n"
         "  --exclusive               WASAPI exclusive mode\n"
