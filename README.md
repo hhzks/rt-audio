@@ -1,7 +1,7 @@
 # rt-audio
 
-Low-latency realtime audio passthrough with an effects chain in C++26. Windows (WASAPI) primary,
-with a portable core designed so that adding ALSA/JACK is a contained change.
+Low-latency realtime audio passthrough with an effects chain in C++26. Windows primary,
+with an ALSA/JACK port in progress.
 
 ## Requirements
 
