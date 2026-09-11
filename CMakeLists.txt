@@ -9,6 +9,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang"
     set(CMAKE_CXX26_STANDARD_COMPILE_OPTION  "-std:c++latest")
     set(CMAKE_CXX26_EXTENSION_COMPILE_OPTION "-std:c++latest")
     set(CMAKE_CXX_STANDARD_LATEST 26)
+    list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+         CMAKE_CXX26_STANDARD_COMPILE_OPTION CMAKE_CXX26_EXTENSION_COMPILE_OPTION)
     message(STATUS "rt_audio: back-filled clang-cl C++26 mapping "
                    "(CMake ${CMAKE_VERSION} predates it)")
 endif()
