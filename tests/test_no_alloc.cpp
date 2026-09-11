@@ -7,6 +7,7 @@
 #include "engine/LoopbackProbe.h"
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
+#include "dsp/RigChain.h"
 #include "dsp/Waveshaper.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -41,8 +42,12 @@ using Catch::Matchers::WithinAbs;
 TEST_CASE("engine block does not allocate", "[engine]") {
     AudioEngine engine;
     engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
-    engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
-    engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
+    auto gate   = std::make_unique<NoiseGate>();
+    auto shaper = std::make_unique<Waveshaper>();
+    NoiseGate*  gateRaw   = gate.get();
+    Waveshaper* shaperRaw = shaper.get();
+    engine.chain().add(std::move(gate));
+    engine.chain().add(std::move(shaper));
     engine.chain().add(std::make_unique<Biquad>(Biquad::Type::Peak, 3000.0, 1.0, 3.0));
 
     constexpr FrameCount kBlock = 256;
@@ -50,9 +55,9 @@ TEST_CASE("engine block does not allocate", "[engine]") {
     engine.prepare(48000.0, kBlock, kCh);   // allocation is allowed HERE
 
     // Make sure parameters are non-trivial so no branch is skipped.
-    engine.params().drive.store(4.0f);
-    engine.params().mix.store(0.8f);
-    engine.params().gateThresholdDb.store(-30.0f);
+    shaperRaw->setParam(Waveshaper::kDrive, 4.0);
+    shaperRaw->setParam(Waveshaper::kMix, 0.8);
+    gateRaw->setParam(NoiseGate::kThreshold, -30.0);
 
     std::vector<float> in(kBlock * kCh), out(kBlock * kCh);
     for (std::size_t i = 0; i < in.size(); ++i)
@@ -69,7 +74,7 @@ TEST_CASE("engine block does not allocate", "[engine]") {
 
 TEST_CASE("bypass path does not allocate", "[engine]") {
     AudioEngine engine;
-    engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
+    engine.chain().add(std::make_unique<Waveshaper>());
     engine.prepare(48000.0, 128, 2);
     engine.params().bypass.store(true);
 
@@ -104,6 +109,28 @@ TEST_CASE("loopback probe does not allocate", "[engine]") {
     g_allocations = 0;
     g_trapArmed = true;
     for (int i = 0; i < 100; ++i) probe.process(in.data(), out.data(), 128);
+    g_trapArmed = false;
+    CHECK(g_allocations.load() == 0);
+}
+
+TEST_CASE("parameter changes do not allocate", "[engine]") {
+    AudioEngine engine;
+    const RigChain rig = buildRigChain(engine.chain());
+    engine.prepare(48000.0, 256, 2);
+
+    std::vector<float> in(256 * 2), out(256 * 2);
+    for (std::size_t i = 0; i < in.size(); ++i)
+        in[i] = 0.5f * std::sin(0.05f * static_cast<float>(i));
+
+    g_allocations = 0;
+    g_trapArmed = true;
+    for (int i = 0; i < 100; ++i) {
+        rig.hpf->setParam(Biquad::kFreq, 80.0 + i);
+        rig.shelf->setParam(Biquad::kGain, (i % 2) != 0 ? 3.0 : -3.0);
+        rig.gate->setParam(NoiseGate::kOn, (i % 3) != 0 ? 1.0 : 0.0);
+        rig.shaper->setParam(Waveshaper::kOn, (i % 5) != 0 ? 1.0 : 0.0);
+        engine.processInterleaved(in.data(), out.data(), 256);
+    }
     g_trapArmed = false;
     CHECK(g_allocations.load() == 0);
 }

@@ -5,6 +5,7 @@ add_library(rt_dsp STATIC
     Oversampler.cpp
     AsyncResampler.cpp
     NoiseGate.cpp
+    RigChain.cpp
 )
 target_link_libraries(rt_dsp PUBLIC rt_core)
 rt_set_warnings(rt_dsp)

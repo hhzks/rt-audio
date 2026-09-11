@@ -2,8 +2,8 @@
 #include "dsp/IEffect.h"
 #include "dsp/Oversampler.h"
 #include "core/ParamSmoother.h"
-#include "core/ParameterStore.h"
 #include <array>
+#include <cstddef>
 #include <vector>
 
 namespace rt {
@@ -13,19 +13,28 @@ namespace rt {
 // fold back down. Costs Oversampler::latencyFrames() of reported latency.
 class Waveshaper : public IEffect {
 public:
-    explicit Waveshaper(const ParameterStore& params) : params_(params) {}
+    enum : std::size_t { kOn = 0, kDrive = 1, kMix = 2 };
+
+    Waveshaper();
 
     void prepare(double sampleRate, FrameCount maxBlockFrames, int numChannels) override;
     void reset() override;
     void process(AudioBufferView& io) noexcept override;
-    const char* name() const noexcept override { return "Waveshaper"; }
+    const char* name() const noexcept override { return "Drive"; }
 
     FrameCount latencyFrames() const noexcept override { return Oversampler::latencyFrames(); }
 
+    std::span<const ParamInfo> params() const noexcept override { return params_.info(); }
+    double paramDefault(std::size_t i) const noexcept override { return params_.defaultValue(i); }
+    double getParam(std::size_t i) const noexcept override     { return params_.get(i); }
+    bool   setParam(std::size_t i, double v) noexcept override { return params_.set(i, v); }
+
 private:
     static float shape(float x) noexcept;
+    float driveTarget() const noexcept;
+    float mixTarget() const noexcept;
 
-    const ParameterStore& params_;
+    ParamBlock<3> params_;
     ParamSmoother driveSmoother_;
     ParamSmoother mixSmoother_;
 

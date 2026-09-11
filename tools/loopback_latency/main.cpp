@@ -1,7 +1,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/LoopbackProbe.h"
 #include "engine/LatencyAnalyzer.h"
-#include "dsp/Biquad.h"
+#include "dsp/RigChain.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
@@ -216,22 +216,24 @@ private:
 };
 
 struct ParamRestorer {
-    explicit ParamRestorer(ParameterStore& params)
+    ParamRestorer(ParameterStore& params, const RigChain& rig)
         : params_(params),
+          rig_(rig),
           bypass_(params.bypass.load()),
-          gate_(params.gateThresholdDb.load()),
-          mix_(params.mix.load()),
-          drive_(params.drive.load()) {}
+          gateOn_(rig.gate->getParam(NoiseGate::kOn)),
+          mix_(rig.shaper->getParam(Waveshaper::kMix)),
+          drive_(rig.shaper->getParam(Waveshaper::kDrive)) {}
     ~ParamRestorer() {
         params_.bypass.store(bypass_);
-        params_.gateThresholdDb.store(gate_);
-        params_.mix.store(mix_);
-        params_.drive.store(drive_);
+        rig_.gate->setParam(NoiseGate::kOn, gateOn_);
+        rig_.shaper->setParam(Waveshaper::kMix, mix_);
+        rig_.shaper->setParam(Waveshaper::kDrive, drive_);
     }
 private:
     ParameterStore& params_;
-    bool  bypass_;
-    float gate_, mix_, drive_;
+    RigChain        rig_;
+    bool   bypass_;
+    double gateOn_, mix_, drive_;
 };
 
 double parseNumber(const std::string& flag, const std::string& v) {
@@ -436,18 +438,15 @@ int main(int argc, char** argv) {
         bool       chainMeasuredValid  = false;
 
         if (!skipChain) {
-            engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
-            engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
-            engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
-            engine.chain().add(std::make_unique<Biquad>(Biquad::Type::LowShelf, 200.0, 0.707, 2.0));
+            const RigChain rig = buildRigChain(engine.chain());
 
             PhaseResult phaseB;
             {
-                ParamRestorer restore(engine.params());
+                ParamRestorer restore(engine.params(), rig);
                 engine.params().bypass.store(false);
-                engine.params().gateThresholdDb.store(-120.0f);
-                engine.params().mix.store(0.0f);
-                engine.params().drive.store(1.0f);
+                rig.gate->setParam(NoiseGate::kOn, 0.0);
+                rig.shaper->setParam(Waveshaper::kMix, 0.0);
+                rig.shaper->setParam(Waveshaper::kDrive, 1.0);
 
                 engine.prepare(st.sampleRate, st.blockFrames, st.numChannels);
                 chainReportedFrames = engine.chain().totalLatencyFrames();
