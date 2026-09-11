@@ -46,6 +46,13 @@ if(TARGET rig_tui)
     target_link_libraries(test_ffi_layout PRIVATE rig_tui rt_ffi)
 endif()
 
+if(TARGET rt_rig)
+    add_test(NAME rt_rig_help COMMAND rt_rig --help)
+    set_tests_properties(rt_rig_help PROPERTIES PASS_REGULAR_EXPRESSION "--backend")
+    add_test(NAME rt_rig_bad_backend COMMAND rt_rig --backend nosuch)
+    set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch")
+endif()
+
 if(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(test_spsc_ringbuffer PRIVATE Threads::Threads)

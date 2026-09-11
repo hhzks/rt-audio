@@ -11,3 +11,4 @@ crate-type = ["staticlib"]
 [dependencies]
 rig_ui = { path = "../rig_ui" }
 clap.workspace = true
+ratatui.workspace = true
