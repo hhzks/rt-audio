@@ -9,6 +9,7 @@
 #include <mmreg.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <sstream>
@@ -16,6 +17,10 @@
 #include <stdexcept>
 
 namespace rt {
+
+static_assert(kHrDeviceInvalidated == static_cast<std::int32_t>(AUDCLNT_E_DEVICE_INVALIDATED));
+static_assert(kHrServiceNotRunning == static_cast<std::int32_t>(AUDCLNT_E_SERVICE_NOT_RUNNING));
+
 namespace {
 
 void throwIfFailed(HRESULT hr, const char* what) {
@@ -379,12 +384,14 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
 
 void WasapiDevice::start() {
     if (running_.exchange(true)) return;
+    if (thread_.joinable()) thread_.join();   // a thread that stopped on a fatal error
+    lastHr_.store(0, std::memory_order_relaxed);
     ResetEvent(shutdownEvent_);
     thread_ = std::thread(&WasapiDevice::threadMain, this);
 }
 
 void WasapiDevice::stop() {
-    if (!running_.exchange(false)) return;
+    running_.store(false, std::memory_order_release);
     if (shutdownEvent_) SetEvent(shutdownEvent_);
     if (thread_.joinable()) thread_.join();
 }
@@ -399,14 +406,40 @@ void WasapiDevice::close() {
     callback_ = nullptr;
 }
 
-void WasapiDevice::drainCapture() noexcept {
-    UINT32 packetFrames = 0;
-    while (SUCCEEDED(captureService_->GetNextPacketSize(&packetFrames)) && packetFrames > 0) {
+DeviceStatus WasapiDevice::status() const {
+    DeviceStatus s = status_;
+    s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
+    s.xruns = xruns_.load(std::memory_order_relaxed);
+    const long hr = lastHr_.load(std::memory_order_relaxed);
+    if (hr != 0) {
+        std::ostringstream os;
+        os << "WASAPI device lost (hr=0x" << std::hex << static_cast<unsigned long>(hr) << ")";
+        s.lastError = os.str();
+    }
+    return s;
+}
+
+bool WasapiDevice::fatal(HRESULT hr) noexcept {
+    if (wasapiActionFor(static_cast<std::int32_t>(hr)) != WasapiAction::Fail) return false;
+    lastHr_.store(hr, std::memory_order_relaxed);
+    return true;
+}
+
+bool WasapiDevice::drainCapture() noexcept {
+    for (;;) {
+        UINT32 packetFrames = 0;
+        const HRESULT hrSize = captureService_->GetNextPacketSize(&packetFrames);
+        if (FAILED(hrSize)) return !fatal(hrSize);
+        if (packetFrames == 0) return true;
+
         BYTE*  data  = nullptr;
         UINT32 frames = 0;
         DWORD  flags  = 0;
-        if (FAILED(captureService_->GetBuffer(&data, &frames, &flags, nullptr, nullptr)))
-            break;
+        const HRESULT hrGet = captureService_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+        if (FAILED(hrGet)) return !fatal(hrGet);
+
+        if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY)
+            xruns_.fetch_add(1, std::memory_order_relaxed);
 
         if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
             std::memset(convertScratch_.data(), 0,
@@ -436,15 +469,17 @@ void WasapiDevice::drainCapture() noexcept {
     }
 }
 
-void WasapiDevice::fillRender() noexcept {
+bool WasapiDevice::fillRender() noexcept {
     UINT32 padding = 0;
-    if (FAILED(render_.client->GetCurrentPadding(&padding))) return;
+    const HRESULT hrPad = render_.client->GetCurrentPadding(&padding);
+    if (FAILED(hrPad)) return !fatal(hrPad);
 
     const UINT32 framesToWrite = render_.bufferFrames - padding;
-    if (framesToWrite == 0) return;
+    if (framesToWrite == 0) return true;
 
     BYTE* out = nullptr;
-    if (FAILED(renderService_->GetBuffer(framesToWrite, &out))) return;
+    const HRESULT hrGet = renderService_->GetBuffer(framesToWrite, &out);
+    if (FAILED(hrGet)) return !fatal(hrGet);
 
     const int         ch   = config_.numChannels;
     const std::size_t need = static_cast<std::size_t>(framesToWrite) * idx(ch);
@@ -461,6 +496,7 @@ void WasapiDevice::fillRender() noexcept {
               render_.sampleFormat);
 
     renderService_->ReleaseBuffer(framesToWrite, 0);
+    return true;
 }
 
 void WasapiDevice::threadMain() {
@@ -483,10 +519,15 @@ void WasapiDevice::threadMain() {
     while (running_.load(std::memory_order_acquire)) {
         const DWORD r = WaitForMultipleObjects(3, waits, FALSE, 2000);
         if (r == WAIT_OBJECT_0) break;          // shutdown
-        if (r == WAIT_TIMEOUT)  continue;       // device stalled; loop and retry
+        if (r == WAIT_TIMEOUT) {                // stalled: is the device still there?
+            UINT32 padding = 0;
+            const HRESULT hr = render_.client->GetCurrentPadding(&padding);
+            if (FAILED(hr) && fatal(hr)) break;
+            continue;
+        }
 
-        if (r == WAIT_OBJECT_0 + 2) { drainCapture(); continue; }
-        if (r == WAIT_OBJECT_0 + 1) { drainCapture(); fillRender(); continue; }
+        if (r == WAIT_OBJECT_0 + 2) { if (!drainCapture()) break; continue; }
+        if (r == WAIT_OBJECT_0 + 1) { if (!drainCapture() || !fillRender()) break; continue; }
         break;                                   // WAIT_FAILED
     }
 
@@ -496,6 +537,7 @@ void WasapiDevice::threadMain() {
     capture_.client->Reset();
 
     if (SUCCEEDED(hrCom)) CoUninitialize();
+    running_.store(false, std::memory_order_release);
 }
 
 } // namespace rt

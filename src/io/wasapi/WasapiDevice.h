@@ -3,6 +3,7 @@
 
 #include "io/IAudioDevice.h"
 #include "io/wasapi/ComPtr.h"
+#include "io/wasapi/WasapiError.h"
 #include "core/SampleConvert.h"
 #include "core/SpscRingBuffer.h"
 #include "core/DriftController.h"
@@ -35,11 +36,7 @@ public:
     void start() override;
     void stop() override;
     void close() override;
-    DeviceStatus status() const override {
-        DeviceStatus s = status_;
-        s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
-        return s;
-    }
+    DeviceStatus status() const override;
     bool isRunning() const override { return running_.load(std::memory_order_acquire); }
 
 private:
@@ -57,8 +54,9 @@ private:
     void initEndpoint(Endpoint& ep, EDataFlow flow, const std::string& id,
                       FrameCount requestedFrames, bool exclusive);
     void threadMain();
-    void drainCapture() noexcept;
-    void fillRender() noexcept;
+    bool drainCapture() noexcept;   // false: fatal error, stop the thread
+    bool fillRender() noexcept;
+    bool fatal(HRESULT hr) noexcept;
 
     ComPtr<IMMDeviceEnumerator> enumerator_;
     ComPtr<IAudioCaptureClient> captureService_;
@@ -72,6 +70,8 @@ private:
     std::thread       thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> captureOverruns_{0};
+    std::atomic<std::uint64_t> xruns_{0};
+    std::atomic<long>          lastHr_{0};
     HANDLE            shutdownEvent_ = nullptr;
     bool              comInitialized_ = false;
 
