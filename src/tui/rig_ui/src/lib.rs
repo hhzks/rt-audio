@@ -6,3 +6,4 @@ pub mod meters;
 pub mod stats;
 pub mod taper;
 pub mod theme;
+pub mod view;
