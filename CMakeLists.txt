@@ -59,6 +59,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/dsp)
 add_subdirectory(src/engine)
 add_subdirectory(src/io)
+add_subdirectory(src/ffi)
 add_subdirectory(src/app)
 
 if(RT_BUILD_TOOLS)

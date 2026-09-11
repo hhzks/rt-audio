@@ -21,6 +21,15 @@ const char* backendName(Backend b) {
     }
 }
 
+std::optional<Backend> backendFromName(std::string_view name) {
+    if (name == "wasapi")  return Backend::Wasapi;
+    if (name == "asio")    return Backend::Asio;
+    if (name == "alsa")    return Backend::Alsa;
+    if (name == "null")    return Backend::Null;
+    if (name == "default") return Backend::Default;
+    return std::nullopt;
+}
+
 std::vector<std::string> availableBackends() {
     std::vector<std::string> v;
 #if defined(_WIN32)

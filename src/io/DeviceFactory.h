@@ -1,7 +1,9 @@
 #pragma once
 #include "io/IAudioDevice.h"
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rt {
@@ -13,5 +15,7 @@ std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend = Backend::Defau
 
 std::vector<std::string> availableBackends();
 const char* backendName(Backend b);
+
+std::optional<Backend> backendFromName(std::string_view name);
 
 } // namespace rt

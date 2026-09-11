@@ -27,6 +27,7 @@ public:
     ParameterStore& params()       noexcept { return params_; }
     RtStats&        stats()        noexcept { return stats_; }
     EffectChain&    chain()        noexcept { return chain_; }
+    const EffectChain& chain() const noexcept { return chain_; }
 
     double     sampleRate()   const noexcept { return sampleRate_; }
     int        numChannels()  const noexcept { return numChannels_; }
