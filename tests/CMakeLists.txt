@@ -35,6 +35,7 @@ rt_add_test(test_alsa_error)
 rt_add_test(test_param_block)
 rt_add_test(test_effect_params)
 rt_add_test(test_metering)
+rt_add_test(test_wasapi_error)
 
 if(UNIX)
     find_package(Threads REQUIRED)
