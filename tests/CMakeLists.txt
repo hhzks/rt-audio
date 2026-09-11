@@ -41,6 +41,11 @@ target_link_libraries(test_session PRIVATE rt_ffi)
 rt_add_test(test_ffi)
 target_link_libraries(test_ffi PRIVATE rt_ffi)
 
+if(TARGET rig_tui)
+    rt_add_test(test_ffi_layout)
+    target_link_libraries(test_ffi_layout PRIVATE rig_tui rt_ffi)
+endif()
+
 if(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(test_spsc_ringbuffer PRIVATE Threads::Threads)

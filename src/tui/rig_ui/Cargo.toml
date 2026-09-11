@@ -1,0 +1,10 @@
+[package]
+name = "rig_ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ratatui.workspace = true
+tachyonfx.workspace = true

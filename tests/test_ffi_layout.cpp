@@ -1,0 +1,79 @@
+#include "ffi/rt_ffi.h"
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+extern "C" std::size_t rt_tui_layout_probe(std::uint64_t* out, std::size_t cap);
+
+#define LAYOUT(T)   v.push_back(sizeof(T)); v.push_back(alignof(T))
+#define FIELD(T, f) v.push_back(offsetof(T, f))
+
+namespace {
+
+// Same order as rig_tui::ffi::layout_values().
+std::vector<std::uint64_t> cLayout() {
+    std::vector<std::uint64_t> v;
+    LAYOUT(rt_open_config);
+    FIELD(rt_open_config, backend);
+    FIELD(rt_open_config, input_id);
+    FIELD(rt_open_config, output_id);
+    FIELD(rt_open_config, sample_rate);
+    FIELD(rt_open_config, block_frames);
+    FIELD(rt_open_config, exclusive);
+
+    LAYOUT(rt_param_desc);
+    FIELD(rt_param_desc, id);
+    FIELD(rt_param_desc, name);
+    FIELD(rt_param_desc, unit);
+    FIELD(rt_param_desc, min);
+    FIELD(rt_param_desc, max);
+    FIELD(rt_param_desc, def);
+    FIELD(rt_param_desc, taper);
+    FIELD(rt_param_desc, flags);
+
+    LAYOUT(rt_strip_desc);
+    FIELD(rt_strip_desc, name);
+    FIELD(rt_strip_desc, param_count);
+    FIELD(rt_strip_desc, latency_frames);
+
+    LAYOUT(rt_device_desc);
+    FIELD(rt_device_desc, backend);
+    FIELD(rt_device_desc, input);
+    FIELD(rt_device_desc, output);
+    FIELD(rt_device_desc, sample_rate);
+    FIELD(rt_device_desc, claimed_rtt_ms);
+    FIELD(rt_device_desc, block_frames);
+    FIELD(rt_device_desc, channels);
+
+    LAYOUT(rt_snapshot);
+    FIELD(rt_snapshot, callbacks);
+    FIELD(rt_snapshot, engine_xruns);
+    FIELD(rt_snapshot, device_xruns);
+    FIELD(rt_snapshot, capture_overruns);
+    FIELD(rt_snapshot, in_clips);
+    FIELD(rt_snapshot, out_clips);
+    FIELD(rt_snapshot, deadline_ns);
+    FIELD(rt_snapshot, hist_window);
+    FIELD(rt_snapshot, in_peak);
+    FIELD(rt_snapshot, out_peak);
+    FIELD(rt_snapshot, params);
+    FIELD(rt_snapshot, channels);
+    FIELD(rt_snapshot, running);
+    FIELD(rt_snapshot, device_error);
+    return v;
+}
+
+} // namespace
+
+TEST_CASE("rust mirrors match the C header", "[ffi]") {
+    const std::vector<std::uint64_t> expected = cLayout();
+    std::vector<std::uint64_t> actual(64, 0);
+    const std::size_t n = rt_tui_layout_probe(actual.data(), actual.size());
+    REQUIRE(n == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        CAPTURE(i);
+        CHECK(actual[i] == expected[i]);
+    }
+}
