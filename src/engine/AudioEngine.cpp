@@ -1,5 +1,6 @@
 #include "engine/AudioEngine.h"
 #include "core/DenormalGuard.h"
+#include "core/AtomicPeak.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -51,6 +52,8 @@ void AudioEngine::warmUp() {
     stats_.callbackNanos.reset();
     stats_.callbackCount.store(0, std::memory_order_relaxed);
     stats_.xruns.store(0, std::memory_order_relaxed);
+    stats_.inputClips.store(0, std::memory_order_relaxed);
+    stats_.outputClips.store(0, std::memory_order_relaxed);
 }
 
 void AudioEngine::processInterleaved(const float* in, float* out, FrameCount numFrames) noexcept {
@@ -70,10 +73,18 @@ void AudioEngine::processInterleaved(const float* in, float* out, FrameCount num
     const float outGain = params_.outputGain.load(std::memory_order_relaxed);
 
     // 1. De-interleave into planar scratch, applying input gain.
+    std::uint64_t inClips = 0;
     for (int c = 0; c < ch; ++c) {
-        float* dst = channelPtrs_[idx(c)];
-        for (FrameCount i = 0; i < numFrames; ++i)
-            dst[i] = in[idx(i * ch + c)] * inGain;
+        float* dst  = channelPtrs_[idx(c)];
+        float  peak = 0.0f;
+        for (FrameCount i = 0; i < numFrames; ++i) {
+            const float s = in[idx(i * ch + c)];
+            const float a = std::fabs(s);
+            peak = std::max(peak, a);
+            if (a >= 1.0f) ++inClips;
+            dst[i] = s * inGain;
+        }
+        raisePeak(stats_.inputPeak[idx(c)], peak);
     }
 
     // 2. Run the chain in place (unless bypassed).
@@ -81,24 +92,26 @@ void AudioEngine::processInterleaved(const float* in, float* out, FrameCount num
     if (!params_.bypass.load(std::memory_order_relaxed))
         chain_.process(view);
 
-    // 3. Re-interleave, apply output gain, hard-limit, track peak.
-    float peak = 0.0f;
+    // 3. Re-interleave, apply output gain, hard-limit, meter.
+    std::uint64_t outClips = 0;
     for (int c = 0; c < ch; ++c) {
-        const float* src = channelPtrs_[idx(c)];
+        const float* src  = channelPtrs_[idx(c)];
+        float        peak = 0.0f;
         for (FrameCount i = 0; i < numFrames; ++i) {
             float v = src[i] * outGain;
             // Safety clamp. A NaN escaping into the driver can wedge the audio
             // engine or produce a very loud noise; neither is acceptable in
             // something you wear headphones for.
             if (!(v > -4.0f && v < 4.0f)) v = 0.0f;
+            if (v > 1.0f || v < -1.0f) ++outClips;
             v = std::clamp(v, -1.0f, 1.0f);
             out[idx(i * ch + c)] = v;
             peak = std::max(peak, std::fabs(v));
         }
+        raisePeak(stats_.outputPeak[idx(c)], peak);
     }
-
-    auto prevPeak = stats_.peakOutputLevel.load(std::memory_order_relaxed);
-    if (peak > prevPeak) stats_.peakOutputLevel.store(peak, std::memory_order_relaxed);
+    if (inClips != 0)  stats_.inputClips.fetch_add(inClips, std::memory_order_relaxed);
+    if (outClips != 0) stats_.outputClips.fetch_add(outClips, std::memory_order_relaxed);
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                              std::chrono::steady_clock::now() - t0).count();
