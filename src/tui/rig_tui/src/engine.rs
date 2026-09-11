@@ -1,9 +1,13 @@
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
-use rig_ui::model::{Device, Engine, EngineError, HIST_BUCKETS, Histogram, Param, Snapshot, Strip, Taper};
+use rig_ui::model::{
+    Device, Engine, EngineError, HIST_BUCKETS, Histogram, Param, Snapshot, Strip, Taper,
+};
 
-use crate::ffi::{self, RtDeviceDesc, RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc};
+use crate::ffi::{
+    self, RtDeviceDesc, RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc,
+};
 
 const _: () = assert!(HIST_BUCKETS == ffi::RT_HIST_BUCKETS);
 
@@ -23,7 +27,11 @@ pub struct FfiEngine {
 }
 
 fn from_c_array(arr: &[c_char]) -> String {
-    let bytes: Vec<u8> = arr.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> = arr
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -54,7 +62,11 @@ impl FfiEngine {
         if s.is_null() {
             return Err(EngineError::Internal("could not create a session".into()));
         }
-        let mut e = FfiEngine { s, strips: Vec::new(), device: Device::default() };
+        let mut e = FfiEngine {
+            s,
+            strips: Vec::new(),
+            device: Device::default(),
+        };
 
         let backend = c_string(&o.backend)?;
         let input = c_string(&o.input)?;
@@ -110,7 +122,8 @@ impl FfiEngine {
 
     fn read_strips(&self) -> Result<Vec<Strip>, EngineError> {
         // SAFETY: `self.s` is live.
-        let count = unsafe { ffi::rt_session_strip_count(self.s) }.clamp(0, ffi::RT_MAX_STRIPS as i32);
+        let count =
+            unsafe { ffi::rt_session_strip_count(self.s) }.clamp(0, ffi::RT_MAX_STRIPS as i32);
         let mut strips = Vec::new();
         for s in 0..count {
             let mut d = RtStripDesc::zeroed();
@@ -128,12 +141,20 @@ impl FfiEngine {
                     min: pd.min,
                     max: pd.max,
                     default: pd.def,
-                    taper: if pd.taper == ffi::RT_TAPER_LOG { Taper::Log } else { Taper::Linear },
+                    taper: if pd.taper == ffi::RT_TAPER_LOG {
+                        Taper::Log
+                    } else {
+                        Taper::Linear
+                    },
                     read_only: pd.flags & ffi::RT_FLAG_READ_ONLY != 0,
                     toggle: pd.flags & ffi::RT_FLAG_TOGGLE != 0,
                 });
             }
-            strips.push(Strip { name: from_c_ptr(d.name), latency_frames: d.latency_frames, params });
+            strips.push(Strip {
+                name: from_c_ptr(d.name),
+                latency_frames: d.latency_frames,
+                params,
+            });
         }
         Ok(strips)
     }
@@ -165,7 +186,9 @@ impl Engine for FfiEngine {
         let mut raw = Box::new(RtSnapshot::zeroed());
         // SAFETY: `raw` is a valid, writable rt_snapshot.
         self.check(unsafe { ffi::rt_session_snapshot(self.s, &mut *raw) })?;
-        let ch = usize::try_from(raw.channels).unwrap_or(0).min(ffi::RT_MAX_CHANNELS);
+        let ch = usize::try_from(raw.channels)
+            .unwrap_or(0)
+            .min(ffi::RT_MAX_CHANNELS);
         let params = self
             .strips
             .iter()

@@ -101,7 +101,11 @@ impl Stats {
     }
 
     pub fn ratio(&self, ns: u64) -> f64 {
-        if self.deadline_ns == 0 { 0.0 } else { ns as f64 / self.deadline_ns as f64 }
+        if self.deadline_ns == 0 {
+            0.0
+        } else {
+            ns as f64 / self.deadline_ns as f64
+        }
     }
 
     pub fn dropouts(&self) -> u64 {
@@ -138,7 +142,11 @@ impl Stats {
         match self.last_progress {
             Some(t) => {
                 let quiet = now.saturating_duration_since(t);
-                if quiet >= threshold { Status::Stalled(quiet) } else { Status::Live }
+                if quiet >= threshold {
+                    Status::Stalled(quiet)
+                } else {
+                    Status::Live
+                }
             }
             None => Status::Live,
         }
@@ -236,7 +244,9 @@ mod tests {
         feed(&mut st, &snap(10, 0), t0);
         feed(&mut st, &snap(10, 0), at(t0, 0.4));
         assert_eq!(st.status(at(t0, 0.4), 2.67), Status::Live);
-        assert!(matches!(st.status(at(t0, 0.6), 2.67), Status::Stalled(d) if d > Duration::from_millis(590)));
+        assert!(
+            matches!(st.status(at(t0, 0.6), 2.67), Status::Stalled(d) if d > Duration::from_millis(590))
+        );
         assert_eq!(st.status(at(t0, 0.6), 200.0), Status::Live); // threshold is 4 x 200 ms
         feed(&mut st, &snap(11, 0), at(t0, 0.7));
         assert_eq!(st.status(at(t0, 0.7), 2.67), Status::Live);

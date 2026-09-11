@@ -94,7 +94,10 @@ impl Snapshot {
             hist_window: Box::new([0; HIST_BUCKETS]),
             in_peak: vec![0.0; channels],
             out_peak: vec![0.0; channels],
-            params: strips.iter().map(|s| s.params.iter().map(|p| p.default).collect()).collect(),
+            params: strips
+                .iter()
+                .map(|s| s.params.iter().map(|p| p.default).collect())
+                .collect(),
             running: true,
             device_error: String::new(),
         }
@@ -135,7 +138,15 @@ pub trait Engine {
     fn bucket_upper_ns(&self, bucket: usize) -> u64;
 }
 
-fn param(id: &str, name: &str, unit: &str, min: f64, max: f64, default: f64, taper: Taper) -> Param {
+fn param(
+    id: &str,
+    name: &str,
+    unit: &str,
+    min: f64,
+    max: f64,
+    default: f64,
+    taper: Taper,
+) -> Param {
     Param {
         id: id.into(),
         name: name.into(),
@@ -150,11 +161,17 @@ fn param(id: &str, name: &str, unit: &str, min: f64, max: f64, default: f64, tap
 }
 
 fn toggle(id: &str, default: f64) -> Param {
-    Param { toggle: true, ..param(id, id, "", 0.0, 1.0, default, Taper::Linear) }
+    Param {
+        toggle: true,
+        ..param(id, id, "", 0.0, 1.0, default, Taper::Linear)
+    }
 }
 
 fn read_only(id: &str, name: &str, unit: &str, min: f64, max: f64) -> Param {
-    Param { read_only: true, ..param(id, name, unit, min, max, max, Taper::Linear) }
+    Param {
+        read_only: true,
+        ..param(id, name, unit, min, max, max, Taper::Linear)
+    }
 }
 
 pub struct FakeEngine {
@@ -222,9 +239,19 @@ impl FakeEngine {
             channels: 2,
             claimed_rtt_ms: 5.3,
         };
-        let next = Snapshot { deadline_ns: 2_666_666, ..Snapshot::empty(&strips, 2) };
+        let next = Snapshot {
+            deadline_ns: 2_666_666,
+            ..Snapshot::empty(&strips, 2)
+        };
         let values = next.params.clone();
-        FakeEngine { strips, device, values, next, sets: Vec::new(), fail_next_set: None }
+        FakeEngine {
+            strips,
+            device,
+            values,
+            next,
+            sets: Vec::new(),
+            fail_next_set: None,
+        }
     }
 }
 
@@ -260,7 +287,10 @@ impl Engine for FakeEngine {
     }
 
     fn snapshot(&mut self) -> Result<Snapshot, EngineError> {
-        Ok(Snapshot { params: self.values.clone(), ..self.next.clone() })
+        Ok(Snapshot {
+            params: self.values.clone(),
+            ..self.next.clone()
+        })
     }
 
     fn percentile_ns(&self, counts: &Histogram, p: f64) -> u64 {
@@ -316,7 +346,10 @@ mod tests {
         e.set_param(2, 0, 0.2).unwrap();
         assert_eq!(e.values[2][0], 0.0);
         assert!(matches!(e.set_param(2, 2, -10.0), Err(EngineError::Arg(_))));
-        assert!(matches!(e.set_param(3, 1, f64::NAN), Err(EngineError::Arg(_))));
+        assert!(matches!(
+            e.set_param(3, 1, f64::NAN),
+            Err(EngineError::Arg(_))
+        ));
         assert!(matches!(e.set_param(9, 0, 0.0), Err(EngineError::Arg(_))));
         assert_eq!(e.sets.len(), 5);
     }
@@ -342,7 +375,11 @@ mod tests {
 
     #[test]
     fn block_ms() {
-        let d = Device { sample_rate: 48000.0, block_frames: 128, ..Device::default() };
+        let d = Device {
+            sample_rate: 48000.0,
+            block_frames: 128,
+            ..Device::default()
+        };
         assert!((d.block_ms() - 2.6666666).abs() < 1e-6);
         assert_eq!(Device::default().block_ms(), 0.0);
     }

@@ -11,6 +11,9 @@ with an ALSA/JACK port in progress.
   `/std:c++26` flag in any MSVC release, and updating Visual Studio does not change that. clang-cl
   keeps the MSVC ABI, so linking is unaffected.
 - **Linux:** GCC >= 14 or Clang >= 17.
+- **Terminal UI (optional):** Rust 1.98.1 through rustup
+  (`rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt`). Without `cargo`
+  on `PATH`, CMake skips `rt_rig` and builds everything else.
 
 ## Build
 
@@ -38,6 +41,18 @@ Paths below use the Windows build directory; on Linux substitute `build/linux`.
 ```bash
 build/windows-clang/src/app/rt_audio --list
 build/windows-clang/src/app/rt_audio --backend null --block 128 --drive 5 --mix 0.7
+build/windows-clang/src/tui/rt_rig --backend null
 build/windows-clang/tools/offline_render/offline_render --out sweep.wav --seconds 5 --drive 6 --mix 0.9
 cmake --build build/windows-clang --target check_layering
 ```
+
+## Terminal UI
+
+`rt_rig` is a terminal UI for playing through the engine: level meters, the effect chain, on/off
+switches, bypass, and callback timing against the block deadline. Press `?` in the app for the
+keys; `q q` quits.
+
+- It works in Windows Terminal, VS Code, Linux desktop terminals and the Linux text console. With
+  `TERM=linux` it uses a reduced glyph set; `--glyphs` and `--color` override the detection.
+- Over SSH, run it inside `tmux`, so a dropped connection does not stop the audio.
+- `--fps 15` reduces CPU use on small boards.

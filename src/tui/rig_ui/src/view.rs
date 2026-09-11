@@ -55,13 +55,31 @@ pub fn draw(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     draw_header(app, theme, header, buf);
 
     let wide = area.width >= WIDE_W;
-    let mut cols = vec![Constraint::Length(METER_W), Constraint::Length(METER_W), Constraint::Fill(1)];
+    let mut cols = vec![
+        Constraint::Length(METER_W),
+        Constraint::Length(METER_W),
+        Constraint::Fill(1),
+    ];
     if wide {
         cols.push(Constraint::Length(HIST_W));
     }
     let cols = Layout::horizontal(cols).split(body);
-    draw_meters(theme, "IN", &app.in_meters, app.in_clip.lit(app.now), cols[0], buf);
-    draw_meters(theme, "OUT", &app.out_meters, app.out_clip.lit(app.now), cols[1], buf);
+    draw_meters(
+        theme,
+        "IN",
+        &app.in_meters,
+        app.in_clip.lit(app.now),
+        cols[0],
+        buf,
+    );
+    draw_meters(
+        theme,
+        "OUT",
+        &app.out_meters,
+        app.out_clip.lit(app.now),
+        cols[1],
+        buf,
+    );
     if wide {
         draw_chain(app, theme, cols[2], buf);
         draw_histogram(app, theme, cols[3], buf);
@@ -103,7 +121,11 @@ fn sep(theme: &Theme) -> &'static str {
 
 fn khz(sample_rate: f64) -> String {
     let k = sample_rate / 1000.0;
-    if k.fract() == 0.0 { format!("{k:.0} kHz") } else { format!("{k:.1} kHz") }
+    if k.fract() == 0.0 {
+        format!("{k:.0} kHz")
+    } else {
+        format!("{k:.1} kHz")
+    }
 }
 
 fn fmt_ns(theme: &Theme, ns: u64) -> String {
@@ -131,9 +153,11 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
 
     let (icon, text, role) = match app.status() {
         Status::Live => (g.live, "LIVE".to_owned(), Role::Good),
-        Status::Stalled(q) => {
-            (g.stalled, format!("STALLED{sep}no audio for {:.1} s", q.as_secs_f64()), Role::Warn)
-        }
+        Status::Stalled(q) => (
+            g.stalled,
+            format!("STALLED{sep}no audio for {:.1} s", q.as_secs_f64()),
+            Role::Warn,
+        ),
         Status::Stopped => {
             let why = if app.snapshot.device_error.is_empty() {
                 "device stopped"
@@ -144,19 +168,42 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         }
     };
     let flash = app.stats.xrun_flash(app.now);
-    let marker = if flash { format!(" {}", g.xrun) } else { String::new() };
-    let badge = if app.bypassed() { format!("{} BYPASS  ", g.stopped) } else { String::new() };
+    let marker = if flash {
+        format!(" {}", g.xrun)
+    } else {
+        String::new()
+    };
+    let badge = if app.bypassed() {
+        format!("{} BYPASS  ", g.stopped)
+    } else {
+        String::new()
+    };
     let status = format!("{icon} {text}");
     let tail = format!(" {bar} xruns {}{marker} ", app.stats.dropouts());
     let width = badge.chars().count() + status.chars().count() + tail.chars().count();
     let right = area.x + area.width;
-    let mut x = right.saturating_sub(u16::try_from(width).unwrap_or(area.width)).max(area.x);
+    let mut x = right
+        .saturating_sub(u16::try_from(width).unwrap_or(area.width))
+        .max(area.x);
     x = put(buf, x, area.y, &badge, theme.style(Role::Bad));
     x = put(buf, x, area.y, &status, theme.style(role));
-    put(buf, x, area.y, &tail, theme.style(if flash { Role::Bad } else { Role::Normal }));
+    put(
+        buf,
+        x,
+        area.y,
+        &tail,
+        theme.style(if flash { Role::Bad } else { Role::Normal }),
+    );
 }
 
-fn draw_meters(theme: &Theme, title: &str, meters: &[Meter], clip: bool, area: Rect, buf: &mut Buffer) {
+fn draw_meters(
+    theme: &Theme,
+    title: &str,
+    meters: &[Meter],
+    clip: bool,
+    area: Rect,
+    buf: &mut Buffer,
+) {
     let inner = boxed(theme, title, area, buf);
     if inner.height < 5 || inner.width < 8 {
         return;
@@ -171,9 +218,22 @@ fn draw_meters(theme: &Theme, title: &str, meters: &[Meter], clip: bool, area: R
     }
     let rows = inner.height - 3;
     for (ch, m) in meters.iter().take(2).enumerate() {
-        draw_vbar(theme, m, inner.x + 1 + 4 * ch as u16, inner.y + 2, rows, buf);
+        draw_vbar(
+            theme,
+            m,
+            inner.x + 1 + 4 * ch as u16,
+            inner.y + 2,
+            rows,
+            buf,
+        );
         let text = readout(theme, m.level_db());
-        put(buf, inner.x + 4 * ch as u16, inner.y + inner.height - 1, &text, normal);
+        put(
+            buf,
+            inner.x + 4 * ch as u16,
+            inner.y + inner.height - 1,
+            &text,
+            normal,
+        );
     }
 }
 
@@ -182,14 +242,19 @@ fn readout(theme: &Theme, db: f64) -> String {
         return "  -".to_owned();
     }
     let s = format!("{db:>3.0}");
-    if theme.rich { s.replace('-', theme.glyphs.minus) } else { s }
+    if theme.rich {
+        s.replace('-', theme.glyphs.minus)
+    } else {
+        s
+    }
 }
 
 fn draw_vbar(theme: &Theme, m: &Meter, x: u16, top: u16, rows: u16, buf: &mut Buffer) {
     let span = -FLOOR_DB;
     let cells = |db: f64| ((db - FLOOR_DB) / span).clamp(0.0, 1.0) * f64::from(rows);
     let level = cells(m.level_db());
-    let hold_row = (m.hold_db() > FLOOR_DB).then(|| (cells(m.hold_db()).floor() as u16).min(rows - 1));
+    let hold_row =
+        (m.hold_db() > FLOOR_DB).then(|| (cells(m.hold_db()).floor() as u16).min(rows - 1));
     for r in 0..rows {
         let y = top + rows - 1 - r;
         let row_top_db = FLOOR_DB + (f64::from(r) + 1.0) / f64::from(rows) * span;
@@ -210,13 +275,26 @@ fn draw_chain(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let selected = app.rows.get(app.selected).copied();
     let mut y = inner.y + 1;
     for s in 0..app.strips.len() {
-        let params: Vec<usize> = app.rows.iter().filter(|r| r.strip == s).map(|r| r.param).collect();
+        let params: Vec<usize> = app
+            .rows
+            .iter()
+            .filter(|r| r.strip == s)
+            .map(|r| r.param)
+            .collect();
         for (k, &p) in params.iter().enumerate() {
             if y + 1 >= bottom {
                 break;
             }
             let row = Row { strip: s, param: p };
-            chain_row(app, theme, buf, (inner.x, y), row, k == 0, selected == Some(row));
+            chain_row(
+                app,
+                theme,
+                buf,
+                (inner.x, y),
+                row,
+                k == 0,
+                selected == Some(row),
+            );
             y += 1;
         }
         if !params.is_empty() {
@@ -233,22 +311,54 @@ fn draw_chain(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     put(buf, inner.x + 3, bottom - 1, &text, theme.style(Role::Dim));
 }
 
-fn chain_row(app: &App, theme: &Theme, buf: &mut Buffer, at: (u16, u16), row: Row, first: bool, selected: bool) {
+fn chain_row(
+    app: &App,
+    theme: &Theme,
+    buf: &mut Buffer,
+    at: (u16, u16),
+    row: Row,
+    first: bool,
+    selected: bool,
+) {
     let (x0, y) = at;
     let strip = &app.strips[row.strip];
     let p = &strip.params[row.param];
     let v = app.values[row.strip][row.param];
     let dim = !app.strip_on(row.strip) || (row.strip != 0 && app.bypassed());
     let base = theme.style(if dim { Role::Dim } else { Role::Normal });
-    let body = if selected { base.patch(theme.style(Role::Selected)) } else { base };
+    let body = if selected {
+        base.patch(theme.style(Role::Selected))
+    } else {
+        base
+    };
 
     let cursor = if selected { theme.glyphs.cursor } else { " " };
     let mut x = put(buf, x0, y, cursor, theme.style(Role::Accent));
-    let head = if first { format!("{} {}", row.strip + 1, name_cell(app, row.strip)) } else { " ".repeat(13) };
-    x = put(buf, x, y, &head, if first && !dim { theme.style(Role::Title) } else { base });
+    let head = if first {
+        format!("{} {}", row.strip + 1, name_cell(app, row.strip))
+    } else {
+        " ".repeat(13)
+    };
+    x = put(
+        buf,
+        x,
+        y,
+        &head,
+        if first && !dim {
+            theme.style(Role::Title)
+        } else {
+            base
+        },
+    );
     x = put(buf, x, y, &format!("{:<6}", p.name), body);
     x = put(buf, x, y, &slider(theme, taper::to_position(p, v)), body);
-    x = put(buf, x, y, &format!(" {:>9}", taper::format_value(p, v, theme.rich)), body);
+    x = put(
+        buf,
+        x,
+        y,
+        &format!(" {:>9}", taper::format_value(p, v, theme.rich)),
+        body,
+    );
     if first {
         indicator(app, theme, buf, (x, y), row.strip);
     }
@@ -288,11 +398,16 @@ fn indicator(app: &App, theme: &Theme, buf: &mut Buffer, at: (u16, u16), s: usiz
     let (x, y) = at;
     let g = &theme.glyphs;
     let strip = &app.strips[s];
-    let Some((i, p)) = strip.params.iter().enumerate().find(|(_, p)| p.read_only) else { return };
+    let Some((i, p)) = strip.params.iter().enumerate().find(|(_, p)| p.read_only) else {
+        return;
+    };
     let v = app.values[s][i];
     if p.id == "gain_reduction" {
-        let (led, word, role) =
-            if v > -3.0 { (g.led_on, "OPEN", Role::Good) } else { (g.led_off, "GATED", Role::Dim) };
+        let (led, word, role) = if v > -3.0 {
+            (g.led_on, "OPEN", Role::Good)
+        } else {
+            (g.led_off, "GATED", Role::Dim)
+        };
         put(buf, x, y, &format!("  {led} {word}"), theme.style(role));
     } else {
         let x = put(buf, x, y, &format!("  {} ", p.name), theme.style(Role::Dim));
@@ -316,28 +431,61 @@ fn draw_engine(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let inner = boxed(theme, "ENGINE", area, buf);
     let st = &app.stats;
     let y = inner.y;
-    let (open, close) = if theme.rich { ("▕", "▏") } else { ("[", "]") };
+    let (open, close) = if theme.rich {
+        ("▕", "▏")
+    } else {
+        ("[", "]")
+    };
     let normal = theme.style(Role::Normal);
     let role = load_role(st.last_load);
 
     let mut x = put(buf, inner.x, y, " load p99 ", normal);
     x = put(buf, x, y, open, theme.style(Role::Dim));
     let filled = st.last_load.clamp(0.0, 1.0) * 20.0;
-    let bar: String = (0..20).map(|c| theme.glyphs.hbar_cell(filled - f64::from(c))).collect();
+    let bar: String = (0..20)
+        .map(|c| theme.glyphs.hbar_cell(filled - f64::from(c)))
+        .collect();
     x = put(buf, x, y, &bar, theme.style(role));
     x = put(buf, x, y, close, theme.style(Role::Dim));
-    x = put(buf, x, y, &format!(" {:>4.0} %", st.last_load * 100.0), theme.style(role));
-    x = put(buf, x, y, &format!("   p99.9 {:.0} %", st.ratio(st.run_p999_ns) * 100.0), normal);
-    x = put(buf, x, y, &format!("   max {:.0} %   ", st.ratio(st.run_max_ns) * 100.0), normal);
+    x = put(
+        buf,
+        x,
+        y,
+        &format!(" {:>4.0} %", st.last_load * 100.0),
+        theme.style(role),
+    );
+    x = put(
+        buf,
+        x,
+        y,
+        &format!("   p99.9 {:.0} %", st.ratio(st.run_p999_ns) * 100.0),
+        normal,
+    );
+    x = put(
+        buf,
+        x,
+        y,
+        &format!("   max {:.0} %   ", st.ratio(st.run_max_ns) * 100.0),
+        normal,
+    );
 
     let room = usize::from((inner.x + inner.width).saturating_sub(x + 1));
     let skip = st.load_history.len().saturating_sub(room);
-    let spark: String = st.load_history.iter().skip(skip).map(|&v| theme.glyphs.vbar_cell(v)).collect();
+    let spark: String = st
+        .load_history
+        .iter()
+        .skip(skip)
+        .map(|&v| theme.glyphs.vbar_cell(v))
+        .collect();
     put(buf, x, y, &spark, theme.style(Role::Accent));
 }
 
 fn draw_histogram(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
-    let title = if theme.rich { "CALLBACK TIME · run" } else { "CALLBACK TIME - run" };
+    let title = if theme.rich {
+        "CALLBACK TIME · run"
+    } else {
+        "CALLBACK TIME - run"
+    };
     let inner = boxed(theme, title, area, buf);
     if inner.height < 6 || inner.width < 20 {
         return;
@@ -379,8 +527,14 @@ fn draw_histogram(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         }
     }
 
-    let (rule, tick) = if theme.rich { ("─", "┴") } else { ("-", "+") };
-    let axis: String = (0..cols).map(|c| if deadline_col == Some(c) { tick } else { rule }).collect();
+    let (rule, tick) = if theme.rich {
+        ("─", "┴")
+    } else {
+        ("-", "+")
+    };
+    let axis: String = (0..cols)
+        .map(|c| if deadline_col == Some(c) { tick } else { rule })
+        .collect();
     let dim = theme.style(Role::Dim);
     put(buf, inner.x, inner.y + rows, &axis, dim);
 
@@ -432,20 +586,40 @@ fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
 fn too_small(theme: &Theme, area: Rect, buf: &mut Buffer) {
     Clear.render(area, buf);
     let t = theme.glyphs.times;
-    let msg = format!("rt-rig needs {MIN_W}{t}{MIN_H} (now {}{t}{})", area.width, area.height);
+    let msg = format!(
+        "rt-rig needs {MIN_W}{t}{MIN_H} (now {}{t}{})",
+        area.width, area.height
+    );
     let len = u16::try_from(msg.chars().count()).unwrap_or(u16::MAX);
     let x = area.x + area.width.saturating_sub(len) / 2;
-    put(buf, x, area.y + area.height / 2, &msg, theme.style(Role::Warn));
+    put(
+        buf,
+        x,
+        area.y + area.height / 2,
+        &msg,
+        theme.style(Role::Warn),
+    );
 }
 
 fn draw_help(theme: &Theme, area: Rect, buf: &mut Buffer) {
     let w = 44u16.min(area.width);
     let h = (HELP.len() as u16 + 2).min(area.height);
-    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let r = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
     Clear.render(r, buf);
     let inner = boxed(theme, "KEYS", r, buf);
     for (i, (k, d)) in HELP.iter().enumerate() {
-        put(buf, inner.x + 1, inner.y + i as u16, &format!("{k:<8}{d}"), theme.style(Role::Normal));
+        put(
+            buf,
+            inner.x + 1,
+            inner.y + i as u16,
+            &format!("{k:<8}{d}"),
+            theme.style(Role::Normal),
+        );
     }
 }
 
@@ -457,13 +631,21 @@ pub struct Fx {
 }
 
 impl Fx {
-    pub fn apply(&mut self, app: &App, theme: &Theme, elapsed: Duration, area: Rect, buf: &mut Buffer) {
+    pub fn apply(
+        &mut self,
+        app: &App,
+        theme: &Theme,
+        elapsed: Duration,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
         if !theme.glyphs.effects {
             return;
         }
         if !self.started {
             self.started = true;
-            self.manager.add_effect(fx::sweep_in(Motion::LeftToRight, 10, 0, Color::Black, 800));
+            self.manager
+                .add_effect(fx::sweep_in(Motion::LeftToRight, 10, 0, Color::Black, 800));
         }
         if app.bypass_changed != self.last_bypass {
             self.last_bypass = app.bypass_changed;
@@ -494,7 +676,9 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| render(app, theme, f)).unwrap();
         let buf = term.backend().buffer();
-        (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect()).collect()
+        (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
     }
 
     fn has(rows: &[String], s: &str) -> bool {
@@ -506,7 +690,11 @@ mod tests {
         let mut e = FakeEngine::rig();
         let app = app_with(&mut e);
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
-        assert!(r[0].contains("rt-rig") && r[0].contains("LIVE") && r[0].contains("xruns 0"), "{}", r[0]);
+        assert!(
+            r[0].contains("rt-rig") && r[0].contains("LIVE") && r[0].contains("xruns 0"),
+            "{}",
+            r[0]
+        );
         assert!(r[1].starts_with('╭'));
         assert!(has(&r, "▸1 MASTER"));
         assert!(has(&r, "GATE    ON thr"));
@@ -550,7 +738,10 @@ mod tests {
         let mut e = FakeEngine::rig();
         e.values[2][2] = -20.0;
         let app = app_with(&mut e);
-        assert!(has(&rows(&app, &Theme::new(true, ColorMode::None), 80, 24), "○ GATED"));
+        assert!(has(
+            &rows(&app, &Theme::new(true, ColorMode::None), 80, 24),
+            "○ GATED"
+        ));
     }
 
     #[test]
@@ -583,7 +774,11 @@ mod tests {
         e.next.device_error = "ALSA transfer failed: x".into();
         let app = app_with(&mut e);
         let r = rows(&app, &Theme::new(true, ColorMode::None), 80, 24);
-        assert!(r[0].contains("STOPPED") && r[0].contains("ALSA transfer failed"), "{}", r[0]);
+        assert!(
+            r[0].contains("STOPPED") && r[0].contains("ALSA transfer failed"),
+            "{}",
+            r[0]
+        );
     }
 
     #[test]

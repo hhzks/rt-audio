@@ -23,14 +23,21 @@ pub struct Meter {
 
 impl Default for Meter {
     fn default() -> Self {
-        Meter { level_db: FLOOR_DB, hold_db: FLOOR_DB, hold_until: None, last: None }
+        Meter {
+            level_db: FLOOR_DB,
+            hold_db: FLOOR_DB,
+            hold_until: None,
+            last: None,
+        }
     }
 }
 
 impl Meter {
     pub fn update(&mut self, peak: f32, now: Instant) {
         let input = to_db(peak);
-        let dt = self.last.map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f64());
+        let dt = self
+            .last
+            .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f64());
         self.last = Some(now);
 
         let fallen = (self.level_db - RELEASE_DB_PER_S * dt).max(FLOOR_DB);

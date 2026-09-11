@@ -32,7 +32,11 @@ enum ColorArg {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "rt_rig", version, about = "rt-rig: play through the rt-audio engine")]
+#[command(
+    name = "rt_rig",
+    version,
+    about = "rt-rig: play through the rt-audio engine"
+)]
 struct Args {
     /// wasapi | alsa | null (default: platform default)
     #[arg(long)]
@@ -174,7 +178,8 @@ fn ui_loop(
         while event::poll(due.saturating_duration_since(Instant::now())).map_err(Fatal::Terminal)? {
             let ev = event::read().map_err(Fatal::Terminal)?;
             if let Some(msg) = map_key(&ev) {
-                app.update(msg, engine, Instant::now()).map_err(Fatal::Engine)?;
+                app.update(msg, engine, Instant::now())
+                    .map_err(Fatal::Engine)?;
             }
             if app.quit {
                 return Ok(());

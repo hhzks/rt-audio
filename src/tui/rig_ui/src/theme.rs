@@ -56,7 +56,8 @@ pub fn pick_colors(choice: ColorChoice, env: &Env) -> ColorMode {
         ColorChoice::None => ColorMode::None,
         ColorChoice::Auto if env.no_color => ColorMode::None,
         ColorChoice::Auto
-            if matches!(env.colorterm.as_deref(), Some("truecolor" | "24bit")) || env.wt_session =>
+            if matches!(env.colorterm.as_deref(), Some("truecolor" | "24bit"))
+                || env.wt_session =>
         {
             ColorMode::TrueColor
         }
@@ -186,7 +187,15 @@ pub struct Theme {
 
 impl Theme {
     pub fn new(rich: bool, colors: ColorMode) -> Self {
-        Theme { rich, glyphs: if rich { Glyphs::rich() } else { Glyphs::basic() }, colors }
+        Theme {
+            rich,
+            glyphs: if rich {
+                Glyphs::rich()
+            } else {
+                Glyphs::basic()
+            },
+            colors,
+        }
     }
 
     fn color(&self, role: Role) -> Option<Color> {
@@ -242,34 +251,87 @@ mod tests {
 
     #[test]
     fn linux_console_gets_basic_glyphs() {
-        assert!(!pick_rich(GlyphChoice::Auto, &env(Some("linux"), None, false, false)));
-        assert!(pick_rich(GlyphChoice::Auto, &env(Some("xterm-256color"), None, false, false)));
+        assert!(!pick_rich(
+            GlyphChoice::Auto,
+            &env(Some("linux"), None, false, false)
+        ));
+        assert!(pick_rich(
+            GlyphChoice::Auto,
+            &env(Some("xterm-256color"), None, false, false)
+        ));
         assert!(pick_rich(GlyphChoice::Auto, &env(None, None, false, false)));
-        assert!(!pick_rich(GlyphChoice::Basic, &env(None, None, false, false)));
-        assert!(pick_rich(GlyphChoice::Rich, &env(Some("linux"), None, false, false)));
+        assert!(!pick_rich(
+            GlyphChoice::Basic,
+            &env(None, None, false, false)
+        ));
+        assert!(pick_rich(
+            GlyphChoice::Rich,
+            &env(Some("linux"), None, false, false)
+        ));
     }
 
     #[test]
     fn colour_detection() {
         use ColorMode as M;
         let auto = ColorChoice::Auto;
-        assert_eq!(pick_colors(auto, &env(None, Some("truecolor"), false, true)), M::None);
-        assert_eq!(pick_colors(auto, &env(None, Some("truecolor"), false, false)), M::TrueColor);
-        assert_eq!(pick_colors(auto, &env(None, Some("24bit"), false, false)), M::TrueColor);
-        assert_eq!(pick_colors(auto, &env(None, None, true, false)), M::TrueColor);
-        assert_eq!(pick_colors(auto, &env(Some("xterm"), None, false, false)), M::Sixteen);
-        assert_eq!(pick_colors(auto, &env(Some("linux"), None, false, false)), M::Sixteen);
-        assert_eq!(pick_colors(ColorChoice::None, &env(None, Some("truecolor"), false, false)), M::None);
-        assert_eq!(pick_colors(ColorChoice::TrueColor, &env(None, None, false, true)), M::TrueColor);
+        assert_eq!(
+            pick_colors(auto, &env(None, Some("truecolor"), false, true)),
+            M::None
+        );
+        assert_eq!(
+            pick_colors(auto, &env(None, Some("truecolor"), false, false)),
+            M::TrueColor
+        );
+        assert_eq!(
+            pick_colors(auto, &env(None, Some("24bit"), false, false)),
+            M::TrueColor
+        );
+        assert_eq!(
+            pick_colors(auto, &env(None, None, true, false)),
+            M::TrueColor
+        );
+        assert_eq!(
+            pick_colors(auto, &env(Some("xterm"), None, false, false)),
+            M::Sixteen
+        );
+        assert_eq!(
+            pick_colors(auto, &env(Some("linux"), None, false, false)),
+            M::Sixteen
+        );
+        assert_eq!(
+            pick_colors(
+                ColorChoice::None,
+                &env(None, Some("truecolor"), false, false)
+            ),
+            M::None
+        );
+        assert_eq!(
+            pick_colors(ColorChoice::TrueColor, &env(None, None, false, true)),
+            M::TrueColor
+        );
     }
 
     #[test]
     fn basic_glyphs_stay_in_the_console_font() {
         let g = Glyphs::basic();
         let all = [
-            g.slider_fill, g.slider_empty, g.slider_knob, g.hold, g.led_on, g.led_off,
-            g.cursor, g.live, g.stalled, g.stopped, g.xrun, g.deadline, g.key_space,
-            g.key_updown, g.key_leftright, g.times, g.minus,
+            g.slider_fill,
+            g.slider_empty,
+            g.slider_knob,
+            g.hold,
+            g.led_on,
+            g.led_off,
+            g.cursor,
+            g.live,
+            g.stalled,
+            g.stopped,
+            g.xrun,
+            g.deadline,
+            g.key_space,
+            g.key_updown,
+            g.key_leftright,
+            g.times,
+            g.minus,
         ];
         for s in all.iter().chain(g.vbar.iter()).chain(g.hbar.iter()) {
             assert!(basic_safe(s), "{s:?}");
@@ -304,11 +366,19 @@ mod tests {
     fn no_colour_mode_still_marks_state() {
         let t = Theme::new(true, ColorMode::None);
         assert!(t.style(Role::Good).fg.is_none());
-        assert!(t.style(Role::Selected).add_modifier.contains(Modifier::REVERSED));
+        assert!(
+            t.style(Role::Selected)
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
         assert!(t.style(Role::Dim).add_modifier.contains(Modifier::DIM));
         assert!(t.style(Role::Bad).add_modifier.contains(Modifier::BOLD));
         let c = Theme::new(true, ColorMode::TrueColor);
         assert!(c.style(Role::Good).fg.is_some());
-        assert!(c.style(Role::Selected).add_modifier.contains(Modifier::REVERSED));
+        assert!(
+            c.style(Role::Selected)
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 }

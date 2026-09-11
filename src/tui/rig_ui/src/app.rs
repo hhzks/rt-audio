@@ -122,13 +122,20 @@ impl App {
             quit: false,
             bypass_changed: None,
             now,
-            bucket_upper_ns: (0..HIST_BUCKETS).map(|b| engine.bucket_upper_ns(b)).collect(),
+            bucket_upper_ns: (0..HIST_BUCKETS)
+                .map(|b| engine.bucket_upper_ns(b))
+                .collect(),
             message: None,
             quit_armed: None,
         }
     }
 
-    pub fn update(&mut self, msg: Msg, engine: &mut dyn Engine, now: Instant) -> Result<(), EngineError> {
+    pub fn update(
+        &mut self,
+        msg: Msg,
+        engine: &mut dyn Engine,
+        now: Instant,
+    ) -> Result<(), EngineError> {
         self.now = now;
         if msg != Msg::Quit {
             self.quit_armed = None;
@@ -166,7 +173,10 @@ impl App {
             Msg::Help => self.help = !self.help,
             Msg::CloseOverlay => self.help = false,
             Msg::Quit => {
-                if self.quit_armed.is_some_and(|t| now.saturating_duration_since(t) <= QUIT_WINDOW) {
+                if self
+                    .quit_armed
+                    .is_some_and(|t| now.saturating_duration_since(t) <= QUIT_WINDOW)
+                {
                     self.quit = true;
                 } else {
                     self.quit_armed = Some(now);
@@ -188,7 +198,8 @@ impl App {
         }
         self.in_clip.update(snap.in_clips, now);
         self.out_clip.update(snap.out_clips, now);
-        self.stats.ingest(&snap, now, &|h, p| engine.percentile_ns(h, p));
+        self.stats
+            .ingest(&snap, now, &|h, p| engine.percentile_ns(h, p));
         self.values = snap.params.clone();
         self.snapshot = snap;
     }
@@ -209,7 +220,11 @@ impl App {
     }
 
     pub fn strip_on(&self, strip: usize) -> bool {
-        if strip == 0 { true } else { self.strip_on_value(strip) }
+        if strip == 0 {
+            true
+        } else {
+            self.strip_on_value(strip)
+        }
     }
 
     // Master's switch is bypass, so its sense is inverted relative to the others.
@@ -225,7 +240,13 @@ impl App {
         self.message = Some((msg.to_owned(), self.now));
     }
 
-    fn set(&mut self, engine: &mut dyn Engine, strip: usize, param: usize, v: f64) -> Result<(), EngineError> {
+    fn set(
+        &mut self,
+        engine: &mut dyn Engine,
+        strip: usize,
+        param: usize,
+        v: f64,
+    ) -> Result<(), EngineError> {
         match engine.set_param(strip, param, v) {
             Ok(()) => {
                 self.values[strip][param] = v;
@@ -243,14 +264,26 @@ impl App {
     }
 
     fn nudge(&mut self, engine: &mut dyn Engine, delta: f64) -> Result<(), EngineError> {
-        let Some(r) = self.rows.get(self.selected).copied() else { return Ok(()) };
-        let v = taper::step(&self.strips[r.strip].params[r.param], self.values[r.strip][r.param], delta);
+        let Some(r) = self.rows.get(self.selected).copied() else {
+            return Ok(());
+        };
+        let v = taper::step(
+            &self.strips[r.strip].params[r.param],
+            self.values[r.strip][r.param],
+            delta,
+        );
         self.set(engine, r.strip, r.param, v)
     }
 
     fn toggle_strip(&mut self, engine: &mut dyn Engine, strip: usize) -> Result<(), EngineError> {
-        let Some(i) = self.strips.get(strip).and_then(Strip::toggle_index) else { return Ok(()) };
-        let next = if self.values[strip][i] >= 0.5 { 0.0 } else { 1.0 };
+        let Some(i) = self.strips.get(strip).and_then(Strip::toggle_index) else {
+            return Ok(());
+        };
+        let next = if self.values[strip][i] >= 0.5 {
+            0.0
+        } else {
+            1.0
+        };
         self.set(engine, strip, i, next)?;
         if strip == 0 {
             self.bypass_changed = Some(self.now);
@@ -346,7 +379,18 @@ mod tests {
         let rows: Vec<(usize, usize)> = app.rows.iter().map(|r| (r.strip, r.param)).collect();
         assert_eq!(
             rows,
-            [(0, 0), (0, 1), (1, 0), (1, 1), (2, 1), (3, 1), (3, 2), (4, 0), (4, 1), (4, 2)]
+            [
+                (0, 0),
+                (0, 1),
+                (1, 0),
+                (1, 1),
+                (2, 1),
+                (3, 1),
+                (3, 2),
+                (4, 0),
+                (4, 1),
+                (4, 2)
+            ]
         );
     }
 
@@ -419,15 +463,19 @@ mod tests {
         app.update(Msg::Quit, &mut e, t0).unwrap();
         assert!(!app.quit);
         assert_eq!(app.message(), Some("press q again to quit"));
-        app.update(Msg::Quit, &mut e, t0 + Duration::from_secs(1)).unwrap();
+        app.update(Msg::Quit, &mut e, t0 + Duration::from_secs(1))
+            .unwrap();
         assert!(app.quit);
 
         let (mut e, mut app, t0) = setup();
         app.update(Msg::Quit, &mut e, t0).unwrap();
-        app.update(Msg::Quit, &mut e, t0 + Duration::from_secs(2)).unwrap();
+        app.update(Msg::Quit, &mut e, t0 + Duration::from_secs(2))
+            .unwrap();
         assert!(!app.quit, "the second press re-arms");
-        app.update(Msg::Down, &mut e, t0 + Duration::from_millis(2100)).unwrap();
-        app.update(Msg::Quit, &mut e, t0 + Duration::from_millis(2200)).unwrap();
+        app.update(Msg::Down, &mut e, t0 + Duration::from_millis(2100))
+            .unwrap();
+        app.update(Msg::Quit, &mut e, t0 + Duration::from_millis(2200))
+            .unwrap();
         assert!(!app.quit, "another key disarms");
 
         let (mut e, mut app, t0) = setup();

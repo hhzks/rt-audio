@@ -53,6 +53,12 @@ if(TARGET rt_rig)
     set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch")
 endif()
 
+if(RT_TUI_ENABLED)
+    add_test(NAME rig_ui_tests
+             COMMAND ${RT_CARGO} test -p rig_ui --locked --target-dir ${CMAKE_BINARY_DIR}/cargo-test
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/tui)
+endif()
+
 if(UNIX)
     find_package(Threads REQUIRED)
     target_link_libraries(test_spsc_ringbuffer PRIVATE Threads::Threads)

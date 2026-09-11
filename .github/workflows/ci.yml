@@ -39,6 +39,14 @@ jobs:
       - name: Test
         run: ctest --test-dir build/linux --output-on-failure
 
+      - name: Rust format
+        working-directory: src/tui
+        run: cargo fmt --check
+
+      - name: Rust lint
+        working-directory: src/tui
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Layering guard
         run: cmake --build build/linux --target check_layering
 
@@ -72,6 +80,14 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/windows-clang --output-on-failure
+
+      - name: Rust format
+        working-directory: src/tui
+        run: cargo fmt --check
+
+      - name: Rust lint
+        working-directory: src/tui
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Layering guard
         run: cmake --build build/windows-clang --target check_layering

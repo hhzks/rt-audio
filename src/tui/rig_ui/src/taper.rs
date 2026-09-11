@@ -65,7 +65,13 @@ mod tests {
 
     #[test]
     fn round_trips() {
-        for (strip, id) in [(1, "freq"), (1, "q"), (3, "drive"), (3, "mix"), (0, "in_gain")] {
+        for (strip, id) in [
+            (1, "freq"),
+            (1, "q"),
+            (3, "drive"),
+            (3, "mix"),
+            (0, "in_gain"),
+        ] {
             let p = param(strip, id);
             for i in 0..=20 {
                 let pos = f64::from(i) / 20.0;
@@ -97,7 +103,10 @@ mod tests {
         assert_eq!(format_value(&param(1, "freq"), 1500.0, true), "1.5 kHz");
         assert_eq!(format_value(&param(1, "q"), 0.707, true), "0.71");
         assert_eq!(format_value(&param(0, "out_gain"), -3.0, false), "-3.0 dB");
-        assert_eq!(format_value(&param(0, "out_gain"), -3.0, true), "\u{2212}3.0 dB");
+        assert_eq!(
+            format_value(&param(0, "out_gain"), -3.0, true),
+            "\u{2212}3.0 dB"
+        );
         assert_eq!(format_value(&param(0, "in_gain"), 0.0, true), "+0.0 dB");
         assert_eq!(format_value(&param(3, "mix"), 0.9, true), "90 %");
         assert_eq!(format_value(&param(3, "drive"), 6.0, true), "6.0 \u{00d7}");
