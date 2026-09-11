@@ -33,6 +33,7 @@ rt_add_test(test_loopback_probe)
 rt_add_test(test_latency_analyzer)
 rt_add_test(test_alsa_error)
 rt_add_test(test_param_block)
+rt_add_test(test_effect_params)
 
 if(UNIX)
     find_package(Threads REQUIRED)
