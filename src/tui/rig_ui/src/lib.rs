@@ -4,3 +4,4 @@ pub mod model;
 pub mod meters;
 pub mod stats;
 pub mod taper;
+pub mod theme;
