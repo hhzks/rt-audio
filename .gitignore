@@ -6,3 +6,4 @@ out/
 *.wav
 compile_commands.json
 CMakeUserPresets.json
+src/tui/target/

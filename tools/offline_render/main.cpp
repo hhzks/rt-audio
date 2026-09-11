@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     double seconds = 5.0, sampleRate = 48000.0;
     FrameCount block = 256;
     int channels = 2;
-    float drive = 4.0f, mix = 0.8f, gateDb = -45.0f;
+    double drive = 4.0, mix = 0.8, gateDb = -45.0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -59,21 +59,22 @@ int main(int argc, char** argv) {
         else if (a == "--seconds") seconds = std::stod(next());
         else if (a == "--rate")    sampleRate = std::stod(next());
         else if (a == "--block")   block = std::stoi(next());
-        else if (a == "--drive")   drive = std::stof(next());
-        else if (a == "--mix")     mix = std::stof(next());
-        else if (a == "--gate")    gateDb = std::stof(next());
+        else if (a == "--drive")   drive = std::stod(next());
+        else if (a == "--mix")     mix = std::stod(next());
+        else if (a == "--gate")    gateDb = std::stod(next());
         else { std::cerr << "unknown arg " << a << "\n"; return 1; }
     }
 
     try {
         AudioEngine engine;
         engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
-        engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
-        engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
-
-        engine.params().drive.store(drive);
-        engine.params().mix.store(mix);
-        engine.params().gateThresholdDb.store(gateDb);
+        auto gate   = std::make_unique<NoiseGate>();
+        auto shaper = std::make_unique<Waveshaper>();
+        gate->setParam(NoiseGate::kThreshold, gateDb);
+        shaper->setParam(Waveshaper::kDrive, drive);
+        shaper->setParam(Waveshaper::kMix, mix);
+        engine.chain().add(std::move(gate));
+        engine.chain().add(std::move(shaper));
         engine.prepare(sampleRate, block, channels);
 
         WavData input  = makeTestSignal(seconds, sampleRate, channels);

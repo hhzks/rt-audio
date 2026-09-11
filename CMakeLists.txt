@@ -45,6 +45,22 @@ endif()
 
 option(RT_BUILD_TESTS "Build unit tests" ON)
 option(RT_BUILD_TOOLS "Build offline tools" ON)
+option(RT_BUILD_TUI "Build the rt_rig terminal UI (needs cargo)" ON)
+
+set(RT_TUI_ENABLED OFF)
+if(RT_BUILD_TUI)
+    find_program(RT_CARGO cargo HINTS "$ENV{HOME}/.cargo/bin" "$ENV{USERPROFILE}/.cargo/bin")
+    if(RT_CARGO)
+        set(RT_TUI_ENABLED ON)
+        if(MSVC)
+            # Rust's MSVC target always links the release DLL CRT. This must be
+            # set before any target is created.
+            set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+        endif()
+    else()
+        message(STATUS "rt_audio: cargo not found, rt_rig disabled")
+    endif()
+endif()
 
 include(cmake/Warnings.cmake)
 
@@ -59,7 +75,23 @@ add_subdirectory(src/core)
 add_subdirectory(src/dsp)
 add_subdirectory(src/engine)
 add_subdirectory(src/io)
+add_subdirectory(src/ffi)
 add_subdirectory(src/app)
+
+if(RT_TUI_ENABLED)
+    # Corrosion calls the toolchain's own cargo, not the rustup proxy, so the
+    # rust-toolchain.toml pin has to be passed in explicitly.
+    file(STRINGS "${CMAKE_SOURCE_DIR}/src/tui/rust-toolchain.toml" _rt_channel REGEX "^channel")
+    string(REGEX REPLACE "^channel *= *\"([^\"]+)\".*" "\\1" _rt_toolchain "${_rt_channel}")
+    set(Rust_TOOLCHAIN "${_rt_toolchain}" CACHE STRING "Rust toolchain used by Corrosion")
+
+    include(FetchContent)
+    FetchContent_Declare(Corrosion
+        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+        GIT_TAG v0.6.1)
+    FetchContent_MakeAvailable(Corrosion)
+    add_subdirectory(src/tui)
+endif()
 
 if(RT_BUILD_TOOLS)
     add_subdirectory(tools)

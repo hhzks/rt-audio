@@ -1,8 +1,9 @@
 #include "engine/AudioEngine.h"
-#include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
+#include "dsp/RigChain.h"
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
+#include "io/EngineCallback.h"
 
 #include <atomic>
 #include <chrono>
@@ -16,18 +17,6 @@
 using namespace rt;
 
 namespace {
-
-// Adapts AudioEngine to the device callback interface. This tiny class is the
-// entire coupling between the I/O layer and the DSP layer.
-class EngineCallback : public IAudioCallback {
-public:
-    explicit EngineCallback(AudioEngine& engine) : engine_(engine) {}
-    void audioDeviceProcess(const float* in, float* out, FrameCount frames) noexcept override {
-        engine_.processInterleaved(in, out, frames);
-    }
-private:
-    AudioEngine& engine_;
-};
 
 Backend parseBackend(const std::string& s) {
     if (s == "wasapi") return Backend::Wasapi;
@@ -59,7 +48,7 @@ void printUsage() {
 int main(int argc, char** argv) {
     DeviceConfig config;
     Backend backend = Backend::Default;
-    float drive = 1.0f, mix = 0.0f, gateDb = -45.0f;
+    double drive = 1.0, mix = 0.0, gateDb = -45.0;
     bool listOnly = false, bypass = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -73,9 +62,9 @@ int main(int argc, char** argv) {
         else if (arg == "--in")        config.inputId = next();
         else if (arg == "--out")       config.outputId = next();
         else if (arg == "--exclusive") config.exclusiveMode = true;
-        else if (arg == "--drive")     drive = std::stof(next());
-        else if (arg == "--mix")       mix = std::stof(next());
-        else if (arg == "--gate")      gateDb = std::stof(next());
+        else if (arg == "--drive")     drive = std::stod(next());
+        else if (arg == "--mix")       mix = std::stod(next());
+        else if (arg == "--gate")      gateDb = std::stod(next());
         else if (arg == "--bypass")    bypass = true;
         else if (arg == "--help")      { printUsage(); return 0; }
         else { std::cerr << "unknown argument: " << arg << "\n"; printUsage(); return 1; }
@@ -100,16 +89,12 @@ int main(int argc, char** argv) {
 
         AudioEngine engine;
 
-        // Build the chain BEFORE prepare(). Order matters: gate first so the
-        // distortion is not amplifying noise, tone shaping last.
-        engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
-        engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
-        engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
-        engine.chain().add(std::make_unique<Biquad>(Biquad::Type::LowShelf, 200.0, 0.707, 2.0));
+        // Build the chain BEFORE prepare().
+        const RigChain rig = buildRigChain(engine.chain());
 
-        engine.params().drive.store(drive);
-        engine.params().mix.store(mix);
-        engine.params().gateThresholdDb.store(gateDb);
+        rig.shaper->setParam(Waveshaper::kDrive, drive);
+        rig.shaper->setParam(Waveshaper::kMix, mix);
+        rig.gate->setParam(NoiseGate::kThreshold, gateDb);
         engine.params().bypass.store(bypass);
 
         EngineCallback callback(engine);

@@ -32,6 +32,32 @@ rt_add_test(test_rt_histogram)
 rt_add_test(test_loopback_probe)
 rt_add_test(test_latency_analyzer)
 rt_add_test(test_alsa_error)
+rt_add_test(test_param_block)
+rt_add_test(test_effect_params)
+rt_add_test(test_metering)
+rt_add_test(test_wasapi_error)
+rt_add_test(test_session)
+target_link_libraries(test_session PRIVATE rt_ffi)
+rt_add_test(test_ffi)
+target_link_libraries(test_ffi PRIVATE rt_ffi)
+
+if(TARGET rig_tui)
+    rt_add_test(test_ffi_layout)
+    target_link_libraries(test_ffi_layout PRIVATE rig_tui rt_ffi)
+endif()
+
+if(TARGET rt_rig)
+    add_test(NAME rt_rig_help COMMAND rt_rig --help)
+    set_tests_properties(rt_rig_help PROPERTIES PASS_REGULAR_EXPRESSION "--backend")
+    add_test(NAME rt_rig_bad_backend COMMAND rt_rig --backend nosuch)
+    set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch")
+endif()
+
+if(RT_TUI_ENABLED)
+    add_test(NAME rig_ui_tests
+             COMMAND ${RT_CARGO} test -p rig_ui --locked --target-dir ${CMAKE_BINARY_DIR}/cargo-test
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/tui)
+endif()
 
 if(UNIX)
     find_package(Threads REQUIRED)

@@ -1,7 +1,7 @@
 #pragma once
 #include "dsp/IEffect.h"
-#include "core/ParameterStore.h"
 #include <array>
+#include <cstddef>
 
 namespace rt {
 
@@ -18,15 +18,22 @@ namespace rt {
 //   * your own STFT Wiener filter (then set latencyFrames() to the window!)
 class NoiseGate : public IEffect {
 public:
-    explicit NoiseGate(const ParameterStore& params) : params_(params) {}
+    enum : std::size_t { kOn = 0, kThreshold = 1, kGainReduction = 2 };
+
+    NoiseGate();
 
     void prepare(double sampleRate, FrameCount maxBlockFrames, int numChannels) override;
     void reset() override;
     void process(AudioBufferView& io) noexcept override;
-    const char* name() const noexcept override { return "NoiseGate"; }
+    const char* name() const noexcept override { return "Gate"; }
+
+    std::span<const ParamInfo> params() const noexcept override { return params_.info(); }
+    double paramDefault(std::size_t i) const noexcept override { return params_.defaultValue(i); }
+    double getParam(std::size_t i) const noexcept override     { return params_.get(i); }
+    bool   setParam(std::size_t i, double v) noexcept override { return params_.set(i, v); }
 
 private:
-    const ParameterStore& params_;
+    ParamBlock<3> params_;
     double sampleRate_ = 48000.0;
     float  attackCoeff_ = 0.0f, releaseCoeff_ = 0.0f, envCoeff_ = 0.0f;
     std::array<float, kMaxChannels> env_{};   // signal envelope, per channel

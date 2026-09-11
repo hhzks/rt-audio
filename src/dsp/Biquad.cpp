@@ -3,6 +3,28 @@
 
 namespace rt {
 
+namespace {
+
+constexpr std::array<ParamInfo, 3> kBiquadInfo{{
+    {"freq", "freq", "Hz",  20.0, 20000.0, 1000.0, Taper::Log,    0},
+    {"q",    "Q",    "",     0.1,    10.0,  0.707, Taper::Log,    0},
+    {"gain", "gain", "dB", -24.0,    24.0,    0.0, Taper::Linear, 0},
+}};
+
+bool hasGain(Biquad::Type t) noexcept {
+    return t == Biquad::Type::Peak || t == Biquad::Type::LowShelf
+        || t == Biquad::Type::HighShelf;
+}
+
+} // namespace
+
+Biquad::Biquad(Type type, double freqHz, double q, double gainDb)
+    : type_(type), params_(kBiquadInfo), freq_(freqHz), q_(q), gainDb_(gainDb) {
+    params_.setDefault(kFreq, freqHz);
+    params_.setDefault(kQ, q);
+    params_.setDefault(kGain, gainDb);
+}
+
 void Biquad::prepare(double sampleRate, FrameCount, int numChannels) {
     sampleRate_  = sampleRate;
     numChannels_ = numChannels;
@@ -12,12 +34,27 @@ void Biquad::prepare(double sampleRate, FrameCount, int numChannels) {
 
 void Biquad::reset() { state_.fill(State{}); }
 
-void Biquad::setParams(double freqHz, double q, double gainDb) {
-    freq_ = freqHz; q_ = q; gainDb_ = gainDb;
-    updateCoeffs();
+const char* Biquad::name() const noexcept {
+    switch (type_) {
+    case Type::LowPass:   return "Low-pass";
+    case Type::HighPass:  return "High-pass";
+    case Type::Peak:      return "Peak";
+    case Type::LowShelf:  return "Low shelf";
+    case Type::HighShelf: return "High shelf";
+    }
+    return "Biquad";
 }
 
-void Biquad::updateCoeffs() {
+std::span<const ParamInfo> Biquad::params() const noexcept {
+    return params_.info().first(hasGain(type_) ? 3 : 2);
+}
+
+bool Biquad::setParam(std::size_t i, double v) noexcept {
+    if (i >= params().size()) return false;
+    return params_.set(i, v);
+}
+
+void Biquad::updateCoeffs() noexcept {
     const double w0    = 2.0 * 3.14159265358979323846 * freq_ / sampleRate_;
     const double cosw0 = std::cos(w0);
     const double sinw0 = std::sin(w0);
@@ -66,6 +103,12 @@ void Biquad::updateCoeffs() {
 }
 
 void Biquad::process(AudioBufferView& io) noexcept {
+    const double f = params_.get(kFreq), q = params_.get(kQ), g = params_.get(kGain);
+    if (f != freq_ || q != q_ || g != gainDb_) {
+        freq_ = f; q_ = q; gainDb_ = g;
+        updateCoeffs();
+    }
+
     const FrameCount n = io.numFrames();
     for (int ch = 0; ch < io.numChannels(); ++ch) {
         float* x = io.channel(ch);

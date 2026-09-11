@@ -5,17 +5,37 @@
 
 namespace rt {
 
+namespace {
+
+constexpr std::array<ParamInfo, 3> kWaveshaperInfo{{
+    {"on",    "on",    "",  0.0,  1.0, 1.0, Taper::Linear, kToggle},
+    {"drive", "drive", "x", 1.0, 20.0, 1.0, Taper::Log,    0},
+    {"mix",   "mix",   "%", 0.0,  1.0, 0.0, Taper::Linear, 0},
+}};
+
+} // namespace
+
+Waveshaper::Waveshaper() : params_(kWaveshaperInfo) {}
+
+float Waveshaper::driveTarget() const noexcept {
+    return static_cast<float>(params_.get(kDrive));
+}
+
+float Waveshaper::mixTarget() const noexcept {
+    return params_.get(kOn) >= 0.5 ? static_cast<float>(params_.get(kMix)) : 0.0f;
+}
+
 void Waveshaper::prepare(double sampleRate, FrameCount maxBlockFrames, int) {
-    driveSmoother_.prepare(sampleRate, 20.0, params_.drive.load(std::memory_order_relaxed));
-    mixSmoother_.prepare(sampleRate, 20.0, params_.mix.load(std::memory_order_relaxed));
+    driveSmoother_.prepare(sampleRate, 20.0, driveTarget());
+    mixSmoother_.prepare(sampleRate, 20.0, mixTarget());
 
     for (auto& os : os_) os.prepare();
     up_.assign(idx(maxBlockFrames * Oversampler::kRatio), 0.0f);
 }
 
 void Waveshaper::reset() {
-    driveSmoother_.snapTo(params_.drive.load(std::memory_order_relaxed));
-    mixSmoother_.snapTo(params_.mix.load(std::memory_order_relaxed));
+    driveSmoother_.snapTo(driveTarget());
+    mixSmoother_.snapTo(mixTarget());
     for (auto& os : os_) os.reset();
 }
 
@@ -26,8 +46,8 @@ float Waveshaper::shape(float x) noexcept {
 }
 
 void Waveshaper::process(AudioBufferView& io) noexcept {
-    driveSmoother_.setTarget(params_.drive.load(std::memory_order_relaxed));
-    mixSmoother_.setTarget(params_.mix.load(std::memory_order_relaxed));
+    driveSmoother_.setTarget(driveTarget());
+    mixSmoother_.setTarget(mixTarget());
 
     const FrameCount n = io.numFrames();
     const int channels = io.numChannels();
@@ -48,9 +68,9 @@ void Waveshaper::process(AudioBufferView& io) noexcept {
         float* x = io.channel(ch);
         os_[idx(ch)].upsample(x, up_.data(), n);
 
-        std::ranges::transform(std::views::take(up_, upCount), 
-                               up_.begin(), 
-                               [drive, mix, makeup](float dry){float wet = shape(dry * drive) * makeup; 
+        std::ranges::transform(std::views::take(up_, upCount),
+                               up_.begin(),
+                               [drive, mix, makeup](float dry){float wet = shape(dry * drive) * makeup;
                                                                return dry + mix * (wet - dry);});
 
         os_[idx(ch)].downsample(up_.data(), x, n);

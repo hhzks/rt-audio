@@ -1,5 +1,8 @@
 #pragma once
 #include "core/AudioBufferView.h"
+#include "core/ParamInfo.h"
+#include <cstddef>
+#include <span>
 
 namespace rt {
 
@@ -26,6 +29,11 @@ public:
     // an STFT denoiser's analysis window both report here so the host can
     // compensate. Report honestly or your delay compensation will be wrong.
     virtual FrameCount latencyFrames() const noexcept { return 0; }
+
+    virtual std::span<const ParamInfo> params() const noexcept { return {}; }
+    virtual double paramDefault(std::size_t) const noexcept    { return 0.0; }
+    virtual double getParam(std::size_t) const noexcept        { return 0.0; }
+    virtual bool   setParam(std::size_t, double) noexcept      { return false; }
 };
 
 } // namespace rt

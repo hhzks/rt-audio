@@ -65,12 +65,13 @@ TEST_CASE("render is bit-identical across toolchains", "[engine]") {
 
     AudioEngine engine;
     engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
-    engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
-    engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
-
-    engine.params().drive.store(6.0f);
-    engine.params().mix.store(0.9f);
-    engine.params().gateThresholdDb.store(-45.0f);
+    auto gate   = std::make_unique<NoiseGate>();
+    auto shaper = std::make_unique<Waveshaper>();
+    shaper->setParam(Waveshaper::kDrive, 6.0);
+    shaper->setParam(Waveshaper::kMix, 0.9);
+    gate->setParam(NoiseGate::kThreshold, -45.0);
+    engine.chain().add(std::move(gate));
+    engine.chain().add(std::move(shaper));
     engine.prepare(kRate, kBlock, kChannels);
 
     const std::vector<float> in  = testSignal(kSeconds, kRate, kChannels);

@@ -1,0 +1,135 @@
+use std::ffi::c_char;
+use std::mem::offset_of;
+
+pub const RT_OK: i32 = 0;
+pub const RT_E_ARG: i32 = 1;
+pub const RT_E_STATE: i32 = 2;
+pub const RT_E_DEVICE: i32 = 3;
+pub const RT_E_INTERNAL: i32 = 4;
+
+pub const RT_MAX_CHANNELS: usize = 8;
+pub const RT_MAX_STRIPS: usize = 16;
+pub const RT_MAX_PARAMS: usize = 8;
+pub const RT_HIST_BUCKETS: usize = 322;
+
+pub const RT_TAPER_LOG: u8 = 1;
+pub const RT_FLAG_READ_ONLY: u8 = 1;
+pub const RT_FLAG_TOGGLE: u8 = 2;
+
+#[repr(C)]
+pub struct RtSession {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct RtOpenConfig {
+    pub backend: *const c_char,
+    pub input_id: *const c_char,
+    pub output_id: *const c_char,
+    pub sample_rate: f64,
+    pub block_frames: i32,
+    pub exclusive: u8,
+}
+
+#[repr(C)]
+pub struct RtParamDesc {
+    pub id: *const c_char,
+    pub name: *const c_char,
+    pub unit: *const c_char,
+    pub min: f64,
+    pub max: f64,
+    pub def: f64,
+    pub taper: u8,
+    pub flags: u8,
+}
+
+#[repr(C)]
+pub struct RtStripDesc {
+    pub name: *const c_char,
+    pub param_count: i32,
+    pub latency_frames: i32,
+}
+
+#[repr(C)]
+pub struct RtDeviceDesc {
+    pub backend: [c_char; 64],
+    pub input: [c_char; 128],
+    pub output: [c_char; 128],
+    pub sample_rate: f64,
+    pub claimed_rtt_ms: f64,
+    pub block_frames: i32,
+    pub channels: i32,
+}
+
+#[repr(C)]
+pub struct RtSnapshot {
+    pub callbacks: u64,
+    pub engine_xruns: u64,
+    pub device_xruns: u64,
+    pub capture_overruns: u64,
+    pub in_clips: u64,
+    pub out_clips: u64,
+    pub deadline_ns: u64,
+    pub hist_window: [u64; RT_HIST_BUCKETS],
+    pub in_peak: [f32; RT_MAX_CHANNELS],
+    pub out_peak: [f32; RT_MAX_CHANNELS],
+    pub params: [[f64; RT_MAX_PARAMS]; RT_MAX_STRIPS],
+    pub channels: i32,
+    pub running: u8,
+    pub device_error: [c_char; 256],
+}
+
+macro_rules! zeroed_ctor {
+    ($($t:ty),*) => {$(
+        impl $t {
+            pub fn zeroed() -> Self {
+                // SAFETY: every field is an integer, a float, an array of those,
+                // or a raw pointer; all-zero bytes are a valid value for each.
+                unsafe { std::mem::zeroed() }
+            }
+        }
+    )*};
+}
+zeroed_ctor!(RtParamDesc, RtStripDesc, RtDeviceDesc, RtSnapshot);
+
+unsafe extern "C" {
+    pub fn rt_session_create() -> *mut RtSession;
+    pub fn rt_session_destroy(s: *mut RtSession);
+    pub fn rt_session_open(s: *mut RtSession, cfg: *const RtOpenConfig) -> i32;
+    pub fn rt_session_stop(s: *mut RtSession) -> i32;
+    pub fn rt_session_last_error(s: *const RtSession, buf: *mut c_char, cap: usize) -> usize;
+    pub fn rt_session_device(s: *const RtSession, out: *mut RtDeviceDesc) -> i32;
+    pub fn rt_session_strip_count(s: *const RtSession) -> i32;
+    pub fn rt_session_strip(s: *const RtSession, strip: i32, out: *mut RtStripDesc) -> i32;
+    pub fn rt_session_param(
+        s: *const RtSession,
+        strip: i32,
+        param: i32,
+        out: *mut RtParamDesc,
+    ) -> i32;
+    pub fn rt_session_set_param(s: *mut RtSession, strip: i32, param: i32, value: f64) -> i32;
+    pub fn rt_session_snapshot(s: *mut RtSession, out: *mut RtSnapshot) -> i32;
+    pub fn rt_hist_percentile_ns(counts: *const u64, p: f64) -> u64;
+    pub fn rt_hist_bucket_upper_ns(bucket: i32) -> u64;
+}
+
+macro_rules! layout {
+    ($v:ident, $t:ty; $($f:ident),*) => {
+        $v.push(size_of::<$t>() as u64);
+        $v.push(align_of::<$t>() as u64);
+        $( $v.push(offset_of!($t, $f) as u64); )*
+    };
+}
+
+// Same order as cLayout() in tests/test_ffi_layout.cpp.
+pub fn layout_values() -> Vec<u64> {
+    let mut v = Vec::new();
+    layout!(v, RtOpenConfig; backend, input_id, output_id, sample_rate, block_frames, exclusive);
+    layout!(v, RtParamDesc; id, name, unit, min, max, def, taper, flags);
+    layout!(v, RtStripDesc; name, param_count, latency_frames);
+    layout!(v, RtDeviceDesc; backend, input, output, sample_rate, claimed_rtt_ms, block_frames, channels);
+    layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns, in_clips,
+        out_clips, deadline_ns, hist_window, in_peak, out_peak, params, channels, running,
+        device_error);
+    v
+}
