@@ -1,9 +1,22 @@
+include(FetchContent)
+FetchContent_Declare(Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.9.1
+    GIT_SHALLOW    TRUE
+    SYSTEM
+    FIND_PACKAGE_ARGS 3)
+FetchContent_MakeAvailable(Catch2)
+
+if(catch2_SOURCE_DIR)
+    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+endif()
+include(Catch)
+
 function(rt_add_test name)
     add_executable(${name} ${name}.cpp)
-    target_link_libraries(${name} PRIVATE rt_engine rt_dsp rt_core)
-    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(${name} PRIVATE rt_engine rt_dsp rt_core Catch2::Catch2WithMain)
     rt_set_warnings(${name})
-    add_test(NAME ${name} COMMAND ${name})
+    catch_discover_tests(${name} TEST_PREFIX "${name}: ")
 endfunction()
 
 rt_add_test(test_spsc_ringbuffer)

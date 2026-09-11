@@ -2,12 +2,15 @@
 // off, to prove the controller pulls fill back to target and parks the trim on
 // the true rate error instead of oscillating around it.
 #include "core/DriftController.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 
@@ -35,37 +38,35 @@ void settle(Sim& s, DriftController& c, double drift, int ticks) {
 
 } // namespace
 
-void testNoDriftLeavesRatioAlone() {
+TEST_CASE("no drift leaves the ratio alone", "[core]") {
     DriftController c;
     c.prepare(static_cast<std::size_t>(kTarget), 0.002);
     Sim s;
 
     settle(s, c, 0.0, 20000);
-    CHECK_NEAR(s.trim, 1.0, 1e-9);
-    CHECK_NEAR(s.fill, kTarget, 1.0);
+    CHECK_THAT(s.trim, WithinAbs(1.0, 1e-9));
+    CHECK_THAT(s.fill, WithinAbs(kTarget, 1.0));
 }
 
 // 50 ppm is a realistic mismatch between two consumer crystals. Uncorrected it
 // drains a 4800-sample ring in about 100 seconds; corrected it must not.
-void testConvergesOnTrueRateError() {
+TEST_CASE("converges on the true rate error", "[core]") {
     for (const double drift : { 50e-6, -50e-6, 200e-6 }) {
+        CAPTURE(drift);
         DriftController c;
         c.prepare(static_cast<std::size_t>(kTarget), 0.002);
         Sim s;
 
         settle(s, c, drift, static_cast<int>(kTickHz * 600.0));   // 10 minutes
 
-        std::printf("  drift %+7.1f ppm -> trim %+7.1f ppm, fill %.0f\n",
-                    drift * 1e6, (s.trim - 1.0) * 1e6, s.fill);
-
-        CHECK_NEAR((s.trim - 1.0) * 1e6, drift * 1e6, 2.0);   // within 2 ppm
-        CHECK_NEAR(s.fill, kTarget, kTarget * 0.05);          // within 5% of target
+        CHECK_THAT((s.trim - 1.0) * 1e6, WithinAbs(drift * 1e6, 2.0));   // within 2 ppm
+        CHECK_THAT(s.fill, WithinAbs(kTarget, kTarget * 0.05));          // within 5% of target
     }
 }
 
 // The ring must not run dry or overflow on the way to convergence -- an
 // excursion past either end is a dropout the user hears.
-void testNoExcursionDuringConvergence() {
+TEST_CASE("no excursion during convergence", "[core]") {
     DriftController c;
     c.prepare(static_cast<std::size_t>(kTarget), 0.002);
     Sim s;
@@ -76,15 +77,15 @@ void testNoExcursionDuringConvergence() {
         lo = std::min(lo, s.fill);
         hi = std::max(hi, s.fill);
     }
-    std::printf("  fill excursion: %.0f .. %.0f (target %.0f)\n", lo, hi, kTarget);
 
+    CAPTURE(lo, hi);
     CHECK(lo > kTarget * 0.5);
     CHECK(hi < kTarget * 1.5);
 }
 
 // A device reporting a wildly wrong rate must not let the trim run away; the
 // clamp is the difference between degraded audio and a pitch-shifted mess.
-void testTrimIsClamped() {
+TEST_CASE("trim is clamped", "[core]") {
     DriftController c;
     c.prepare(static_cast<std::size_t>(kTarget), 0.002);
 
@@ -95,12 +96,4 @@ void testTrimIsClamped() {
     c2.prepare(static_cast<std::size_t>(kTarget), 0.002);
     for (int i = 0; i < 100000; ++i) c2.update(static_cast<std::size_t>(kTarget) * 100);
     CHECK(c2.trim() <= 1.0 + 0.002 + 1e-12);
-}
-
-int main() {
-    RUN(testNoDriftLeavesRatioAlone);
-    RUN(testConvergesOnTrueRateError);
-    RUN(testNoExcursionDuringConvergence);
-    RUN(testTrimIsClamped);
-    TEST_MAIN_END
 }

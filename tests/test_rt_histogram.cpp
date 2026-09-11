@@ -1,5 +1,5 @@
 #include "engine/RtHistogram.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
 #include "core/Types.h"
 #include "engine/AudioEngine.h"
 
@@ -11,25 +11,28 @@
 
 using namespace rt;
 
-void testBucketMonotonic() {
+TEST_CASE("bucket index is monotonic", "[engine]") {
     int prev = RtHistogram::bucketFor(0);
     for (std::uint64_t ns = 1; ns < 200'000'000ull; ns += ns / 64 + 1) {
+        CAPTURE(ns);
         const int b = RtHistogram::bucketFor(ns);
         CHECK(b >= prev);
         prev = b;
     }
 }
 
-void testBucketRoundTrip() {
+TEST_CASE("bucket bounds contain the value", "[engine]") {
     for (std::uint64_t ns = 256; ns < (1ull << 28); ns += ns / 32 + 1) {
+        CAPTURE(ns);
         const int b = RtHistogram::bucketFor(ns);
         CHECK(RtHistogram::bucketLowerNs(b) <= ns);
         CHECK(ns < RtHistogram::bucketUpperNs(b));
     }
 }
 
-void testBucketRelativeWidth() {
+TEST_CASE("bucket relative width", "[engine]") {
     for (int b = 1; b < RtHistogram::kBucketCount - 1; ++b) {
+        CAPTURE(b);
         const auto lo = RtHistogram::bucketLowerNs(b);
         const auto hi = RtHistogram::bucketUpperNs(b);
         CHECK(hi > lo);
@@ -38,7 +41,7 @@ void testBucketRelativeWidth() {
     }
 }
 
-void testUnderflowOverflow() {
+TEST_CASE("underflow and overflow buckets", "[engine]") {
     CHECK(RtHistogram::bucketFor(0)   == 0);
     CHECK(RtHistogram::bucketFor(255) == 0);
     CHECK(RtHistogram::bucketFor(256) == 1);
@@ -55,7 +58,7 @@ void put(HistogramSnapshot& s, std::uint64_t ns, std::uint64_t n) {
 }
 }
 
-void testPercentiles() {
+TEST_CASE("percentiles", "[engine]") {
     HistogramSnapshot s;
     put(s, 20'000, 990);        // 20 us
     put(s, 2'000'000, 10);      // 2 ms
@@ -67,14 +70,14 @@ void testPercentiles() {
     CHECK(s.maxNs() >= 2'000'000);
 }
 
-void testEmptySnapshot() {
+TEST_CASE("empty snapshot", "[engine]") {
     HistogramSnapshot s;
     CHECK(s.nsAtPercentile(0.5) == 0);
     CHECK(s.maxNs() == 0);
     CHECK(s.total == 0);
 }
 
-void testPercentileClamped() {
+TEST_CASE("percentile is clamped", "[engine]") {
     HistogramSnapshot s;
     put(s, 20'000, 990);
     put(s, 2'000'000, 10);
@@ -84,14 +87,14 @@ void testPercentileClamped() {
     CHECK(s.nsAtPercentile(2.0)  == s.nsAtPercentile(1.0));
 }
 
-void testPercentileNoTruncationBias() {
+TEST_CASE("percentile has no truncation bias", "[engine]") {
     HistogramSnapshot s;
     put(s, 20'000, 28);
     put(s, 2'000'000, 72);
     CHECK(s.nsAtPercentile(0.29) >= 2'000'000);
 }
 
-void testSnapshotAdd() {
+TEST_CASE("snapshot add", "[engine]") {
     HistogramSnapshot a, b;
     put(a, 20'000, 5);
     put(b, 20'000, 7);
@@ -102,7 +105,7 @@ void testSnapshotAdd() {
     CHECK(a.counts[idx(RtHistogram::bucketFor(2'000'000))] == 1);
 }
 
-void testRecordAndPeek() {
+TEST_CASE("record and peek", "[engine]") {
     RtHistogram h;
     for (int i = 0; i < 100; ++i) h.record(20'000);
     h.record(2'000'000);
@@ -112,14 +115,14 @@ void testRecordAndPeek() {
     CHECK(s.maxNs() >= 2'000'000);
 }
 
-void testPeekIsNonDestructive() {
+TEST_CASE("peek is non-destructive", "[engine]") {
     RtHistogram h;
     h.record(20'000);
     CHECK(h.peek().total == 1);
     CHECK(h.peek().total == 1);
 }
 
-void testDrainIsDestructiveAndLossless() {
+TEST_CASE("drain is destructive and lossless", "[engine]") {
     RtHistogram h;
     for (int i = 0; i < 50; ++i) h.record(20'000);
     const auto first = h.drain();
@@ -129,19 +132,20 @@ void testDrainIsDestructiveAndLossless() {
     CHECK(h.peek().total == 0);
 }
 
-void testReset() {
+TEST_CASE("reset", "[engine]") {
     RtHistogram h;
     h.record(20'000);
     h.reset();
     CHECK(h.peek().total == 0);
 }
 
-void testConcurrentDrainLosesNothing() {
+TEST_CASE("concurrent drain loses nothing", "[engine]") {
     constexpr int kWriters          = 3;
     constexpr int kRecordsPerWriter = 50'000;
     constexpr int kTrials           = 20;
 
     for (int trial = 0; trial < kTrials; ++trial) {
+        CAPTURE(trial);
         RtHistogram h;
         std::atomic<int> finished{0};
 
@@ -166,7 +170,7 @@ void testConcurrentDrainLosesNothing() {
     }
 }
 
-void testOverflowReportedAtCeiling() {
+TEST_CASE("overflow is reported at the ceiling", "[engine]") {
     RtHistogram h;
     h.record(20'000);
     h.record(1ull << 29);
@@ -176,7 +180,7 @@ void testOverflowReportedAtCeiling() {
     CHECK(s.maxNs() != UINT64_MAX);
 }
 
-void testEngineRecordsEveryCallbackAfterWarmUp() {
+TEST_CASE("engine records every callback after warm-up", "[engine]") {
     AudioEngine engine;
     engine.prepare(48000.0, 128, 2);
     CHECK(engine.stats().callbackNanos.peek().total == 0);
@@ -188,24 +192,4 @@ void testEngineRecordsEveryCallbackAfterWarmUp() {
     CHECK(engine.stats().callbackNanos.peek().total == 50);
     CHECK(engine.stats().loadFactorAt(0.5) > 0.0);
     CHECK(engine.stats().loadFactorAt(0.5) < 1.0);
-}
-
-int main() {
-    RUN(testBucketMonotonic);
-    RUN(testBucketRoundTrip);
-    RUN(testBucketRelativeWidth);
-    RUN(testUnderflowOverflow);
-    RUN(testPercentiles);
-    RUN(testEmptySnapshot);
-    RUN(testPercentileClamped);
-    RUN(testPercentileNoTruncationBias);
-    RUN(testSnapshotAdd);
-    RUN(testRecordAndPeek);
-    RUN(testPeekIsNonDestructive);
-    RUN(testDrainIsDestructiveAndLossless);
-    RUN(testReset);
-    RUN(testConcurrentDrainLosesNothing);
-    RUN(testOverflowReportedAtCeiling);
-    RUN(testEngineRecordsEveryCallbackAfterWarmUp);
-    TEST_MAIN_END
 }

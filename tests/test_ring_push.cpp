@@ -1,10 +1,12 @@
 #include "core/RingPush.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstddef>
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 
@@ -34,31 +36,32 @@ std::vector<float> drain(SpscRingBuffer& ring) {
 
 } // namespace
 
-void testEmptyRingTakesExactlyTheBlock() {
+TEST_CASE("empty ring takes exactly the block", "[core]") {
     SpscRingBuffer ring;
     ring.reset(192 * kCh * 4);
 
     const auto block = makeBlock(192);
     const bool evicted = pushEvictingOldest(ring, block.data(), block.size(), kCh);
 
-    CHECK(!evicted);
+    CHECK_FALSE(evicted);
     CHECK(ring.readAvailable() == block.size());
     CHECK(drain(ring) == block);
 }
 
-void testRepeatedBlocksWithRoomNeverEvict() {
+TEST_CASE("repeated blocks with room never evict", "[core]") {
     SpscRingBuffer ring;
     ring.reset(192 * kCh * 4);
 
     for (int i = 0; i < 3; ++i) {
+        CAPTURE(i);
         const auto b = makeBlock(192, static_cast<float>(i) * 1000.0f);
-        CHECK(!pushEvictingOldest(ring, b.data(), b.size(), kCh));
+        CHECK_FALSE(pushEvictingOldest(ring, b.data(), b.size(), kCh));
     }
     CHECK(ring.readAvailable() == 192 * kCh * 3);
     CHECK(interleaveIntact(drain(ring)));
 }
 
-void testOverflowEvictsAndKeepsFrameAlignment() {
+TEST_CASE("overflow evicts and keeps frame alignment", "[core]") {
     SpscRingBuffer ring;
     ring.reset(192 * kCh * 4);
 
@@ -73,7 +76,7 @@ void testOverflowEvictsAndKeepsFrameAlignment() {
     CHECK(interleaveIntact(drain(ring)));
 }
 
-void testOversizedBlockKeepsNewestFrames() {
+TEST_CASE("oversized block keeps the newest frames", "[core]") {
     SpscRingBuffer ring;
     ring.reset(64);
 
@@ -86,25 +89,18 @@ void testOversizedBlockKeepsNewestFrames() {
     const auto out = drain(ring);
     CHECK(interleaveIntact(out));
     if (out.size() >= kCh)
-        CHECK_NEAR(out[out.size() - kCh], block[block.size() - kCh], 0.0);
+        CHECK_THAT(out[out.size() - kCh],
+                   WithinAbs(static_cast<double>(block[block.size() - kCh]), 0.0));
 }
 
-void testNeverExceedsCapacity() {
+TEST_CASE("never exceeds capacity", "[core]") {
     SpscRingBuffer ring;
     ring.reset(192 * kCh * 4);
 
     for (int i = 0; i < 20; ++i) {
+        CAPTURE(i);
         const auto b = makeBlock(192, static_cast<float>(i));
         pushEvictingOldest(ring, b.data(), b.size(), kCh);
         CHECK(ring.readAvailable() < ring.capacity());
     }
-}
-
-int main() {
-    RUN(testEmptyRingTakesExactlyTheBlock);
-    RUN(testRepeatedBlocksWithRoomNeverEvict);
-    RUN(testOverflowEvictsAndKeepsFrameAlignment);
-    RUN(testOversizedBlockKeepsNewestFrames);
-    RUN(testNeverExceedsCapacity);
-    TEST_MAIN_END
 }

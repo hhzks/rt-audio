@@ -1,12 +1,16 @@
 #include "core/SpscRingBuffer.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
-void testBasicPushPop() {
+TEST_CASE("basic push and pop", "[core]") {
     SpscRingBuffer ring;
     ring.reset(16);
     CHECK(ring.capacity() >= 16);
@@ -18,11 +22,11 @@ void testBasicPushPop() {
 
     float out[4] = {};
     CHECK(ring.pop(out, 4) == 4);
-    for (int i = 0; i < 4; ++i) CHECK_NEAR(out[i], in[i], 1e-9);
+    for (int i = 0; i < 4; ++i) CHECK_THAT(out[i], WithinAbs(static_cast<double>(in[i]), 1e-9));
     CHECK(ring.readAvailable() == 0);
 }
 
-void testWrapAround() {
+TEST_CASE("indices wrap around", "[core]") {
     SpscRingBuffer ring;
     ring.reset(8);
     float v = 0.0f, out[3] = {};
@@ -31,12 +35,13 @@ void testWrapAround() {
         const float in[3] = { v, v + 1, v + 2 };
         CHECK(ring.push(in, 3) == 3);
         CHECK(ring.pop(out, 3) == 3);
-        for (int i = 0; i < 3; ++i) CHECK_NEAR(out[i], v + static_cast<float>(i), 1e-9);
+        for (int i = 0; i < 3; ++i)
+            CHECK_THAT(out[i], WithinAbs(static_cast<double>(v + static_cast<float>(i)), 1e-9));
         v += 3.0f;
     }
 }
 
-void testOverflowIsClamped() {
+TEST_CASE("overflow is clamped", "[core]") {
     SpscRingBuffer ring;
     ring.reset(8);                       // capacity 8, usable 7
     std::vector<float> big(100, 1.0f);
@@ -45,7 +50,7 @@ void testOverflowIsClamped() {
     CHECK(ring.readAvailable() == pushed);
 }
 
-void testPopOrZeroSignalsUnderrun() {
+TEST_CASE("popOrZero signals underrun", "[core]") {
     SpscRingBuffer ring;
     ring.reset(16);
     const float in[2] = { 5.0f, 6.0f };
@@ -53,13 +58,13 @@ void testPopOrZeroSignalsUnderrun() {
 
     float out[4] = { 9, 9, 9, 9 };
     CHECK(ring.popOrZero(out, 4) == true);   // underrun reported
-    CHECK_NEAR(out[0], 5.0, 1e-9);
-    CHECK_NEAR(out[1], 6.0, 1e-9);
-    CHECK_NEAR(out[2], 0.0, 1e-9);           // shortfall zero-filled
-    CHECK_NEAR(out[3], 0.0, 1e-9);
+    CHECK_THAT(out[0], WithinAbs(5.0, 1e-9));
+    CHECK_THAT(out[1], WithinAbs(6.0, 1e-9));
+    CHECK_THAT(out[2], WithinAbs(0.0, 1e-9));   // shortfall zero-filled
+    CHECK_THAT(out[3], WithinAbs(0.0, 1e-9));
 }
 
-void testDiscard() {
+TEST_CASE("discard drops the oldest samples", "[core]") {
     SpscRingBuffer ring;
     ring.reset(16);
 
@@ -76,7 +81,7 @@ void testDiscard() {
 
     float out[5] = {};
     CHECK(ring.pop(out, 5) == 5);
-    for (int i = 0; i < 5; ++i) CHECK_NEAR(out[i], in[i + 3], 1e-9);
+    for (int i = 0; i < 5; ++i) CHECK_THAT(out[i], WithinAbs(static_cast<double>(in[i + 3]), 1e-9));
 
     // Over-asking clamps to what is there rather than running the read index
     // past the write index.
@@ -88,7 +93,7 @@ void testDiscard() {
 
 // The property that actually matters: no lost or duplicated samples when
 // producer and consumer run concurrently on different cores.
-void testConcurrentIntegrity() {
+TEST_CASE("concurrent producer and consumer lose nothing", "[core]") {
     SpscRingBuffer ring;
     ring.reset(1024);
 
@@ -127,14 +132,4 @@ void testConcurrentIntegrity() {
 
     CHECK(sequenceOk);
     CHECK(read == kTotal);
-}
-
-int main() {
-    RUN(testBasicPushPop);
-    RUN(testWrapAround);
-    RUN(testOverflowIsClamped);
-    RUN(testPopOrZeroSignalsUnderrun);
-    RUN(testDiscard);
-    RUN(testConcurrentIntegrity);
-    TEST_MAIN_END
 }

@@ -1,12 +1,14 @@
 #include "engine/LoopbackProbe.h"
 #include "engine/LatencyAnalyzer.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 int zeroCrossings(const std::vector<float>& v, std::size_t from, std::size_t to) {
@@ -42,7 +44,7 @@ private:
 };
 }
 
-void testSweepLengthAndBounds() {
+TEST_CASE("sweep length and bounds", "[engine]") {
     SweepConfig cfg;
     std::vector<float> s;
     generateSweep(cfg, 48000.0, s);
@@ -50,7 +52,7 @@ void testSweepLengthAndBounds() {
     for (float v : s) CHECK(std::fabs(v) <= cfg.amplitude + 1e-6f);
 }
 
-void testSweepFadesToZero() {
+TEST_CASE("sweep fades to zero", "[engine]") {
     SweepConfig cfg;
     std::vector<float> s;
     generateSweep(cfg, 48000.0, s);
@@ -58,7 +60,7 @@ void testSweepFadesToZero() {
     CHECK(std::fabs(s.back())  < 1e-9f);
 }
 
-void testSweepRisesInFrequency() {
+TEST_CASE("sweep rises in frequency", "[engine]") {
     SweepConfig cfg;
     std::vector<float> s;
     generateSweep(cfg, 48000.0, s);
@@ -68,7 +70,7 @@ void testSweepRisesInFrequency() {
     CHECK(late > early * 10);
 }
 
-void testStateMachineReachesDone() {
+TEST_CASE("state machine reaches Done", "[engine]") {
     SweepConfig cfg;
     cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
     cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
@@ -87,7 +89,7 @@ void testStateMachineReachesDone() {
     CHECK(probe.captured().size() > 0);
 }
 
-void testIrregularBlockSizes() {
+TEST_CASE("irregular block sizes", "[engine]") {
     SweepConfig cfg;
     cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
     cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
@@ -123,7 +125,8 @@ void runLoopbackAndCheck(const FrameCount* sizes, int nsizes) {
         probe.process(in.data(), out.data(), n);
         for (FrameCount f = 0; f < n; ++f) {
             if (std::fabs(out[idx(f) * 2]) > 0.01f) {
-                CHECK_NEAR(out[idx(f) * 2 + 1], out[idx(f) * 2], 1e-9);
+                CHECK_THAT(out[idx(f) * 2 + 1],
+                           WithinAbs(static_cast<double>(out[idx(f) * 2]), 1e-9));
                 ++stereoChecked;
             }
         }
@@ -135,21 +138,22 @@ void runLoopbackAndCheck(const FrameCount* sizes, int nsizes) {
     const auto r = analyzeLatency(probe.reference(), probe.captured(),
                                   static_cast<int>(cfg.maxLatencySeconds * 48000.0), 48000.0);
     CHECK(r.valid);
-    CHECK_NEAR(r.lagFrames, D, 0.5);
+    CHECK_THAT(r.lagFrames, WithinAbs(D, 0.5));
 }
 
-void testProbeAndAnalyzerAgreeOnKnownDelay() {
+TEST_CASE("probe and analyzer agree on a known delay", "[engine]") {
     const FrameCount sizes[] = {128};
     runLoopbackAndCheck(sizes, 1);
 }
 
-void testProbeAndAnalyzerAgreeUnderIrregularBlocks() {
+TEST_CASE("probe and analyzer agree under irregular blocks", "[engine]") {
     const FrameCount sizes[] = {144, 128, 144, 96};
     runLoopbackAndCheck(sizes, 4);
 }
 
-void testShortSweepStillFadesOut() {
+TEST_CASE("short sweep still fades out", "[engine]") {
     for (double sec : {0.005, 0.008}) {
+        CAPTURE(sec);
         SweepConfig cfg;
         cfg.seconds = sec;
         std::vector<float> s;
@@ -160,25 +164,26 @@ void testShortSweepStillFadesOut() {
     }
 }
 
-void testDegenerateSweepConfigProducesNothing() {
+TEST_CASE("degenerate sweep config produces nothing", "[engine]") {
     const double los[] = {0.0, 1000.0, -200.0};
     const double his[] = {10000.0, 1000.0, 10000.0};
     for (int i = 0; i < 3; ++i) {
         SweepConfig cfg;
         cfg.loHz = los[idx(i)]; cfg.hiHz = his[idx(i)];
+        CAPTURE(cfg.loHz, cfg.hiHz);
         std::vector<float> s;
         generateSweep(cfg, 48000.0, s);
         CHECK(s.empty());
     }
 }
 
-void testIdleAndDoneEmitSilence() {
+TEST_CASE("Idle and Done emit silence", "[engine]") {
     SweepConfig cfg;
     LoopbackProbe probe;
     probe.prepare(48000.0, 128, 2, cfg);
     std::vector<float> in(128 * 2, 0.0f), out(128 * 2, 7.0f);
     probe.process(in.data(), out.data(), 128);
-    for (float v : out) CHECK_NEAR(v, 0.0, 1e-9);
+    for (float v : out) CHECK_THAT(v, WithinAbs(0.0, 1e-9));
 
     probe.arm();
     int guard = 0;
@@ -187,19 +192,5 @@ void testIdleAndDoneEmitSilence() {
     CHECK(probe.state() == ProbeState::Done);
     std::fill(out.begin(), out.end(), 7.0f);
     probe.process(in.data(), out.data(), 128);
-    for (float v : out) CHECK_NEAR(v, 0.0, 1e-9);
-}
-
-int main() {
-    RUN(testSweepLengthAndBounds);
-    RUN(testSweepFadesToZero);
-    RUN(testSweepRisesInFrequency);
-    RUN(testStateMachineReachesDone);
-    RUN(testIrregularBlockSizes);
-    RUN(testIdleAndDoneEmitSilence);
-    RUN(testProbeAndAnalyzerAgreeOnKnownDelay);
-    RUN(testProbeAndAnalyzerAgreeUnderIrregularBlocks);
-    RUN(testShortSweepStillFadesOut);
-    RUN(testDegenerateSweepConfigProducesNothing);
-    TEST_MAIN_END
+    for (float v : out) CHECK_THAT(v, WithinAbs(0.0, 1e-9));
 }

@@ -1,7 +1,8 @@
 // Proves the 4x polyphase FIR is transparent in the passband, reports its
 // latency honestly, and actually suppresses the aliasing it exists to remove.
 #include "dsp/Oversampler.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 
@@ -66,7 +68,7 @@ std::vector<float> sine(std::size_t frames, double freq, float amplitude) {
 
 } // namespace
 
-void testDcPassesThroughAtUnityGain() {
+TEST_CASE("DC passes through at unity gain", "[dsp]") {
     const std::vector<float> in(idx(kBlock) * 8, 1.0f);
     const auto out = roundTrip(in, 0.0f);
 
@@ -76,10 +78,10 @@ void testDcPassesThroughAtUnityGain() {
     for (std::size_t i = idx(Oversampler::latencyFrames()) * 2; i < out.size(); ++i)
         worst = std::max(worst, std::fabs(static_cast<double>(out[i]) - 1.0));
 
-    CHECK_NEAR(1.0 + worst, 1.0, 1e-4);
+    CHECK_THAT(1.0 + worst, WithinAbs(1.0, 1e-4));
 }
 
-void testImpulsePeaksAtTheReportedLatency() {
+TEST_CASE("impulse peaks at the reported latency", "[dsp]") {
     std::vector<float> in(idx(kBlock) * 2, 0.0f);
     in[0] = 1.0f;
 
@@ -94,7 +96,7 @@ void testImpulsePeaksAtTheReportedLatency() {
     CHECK(peak == idx(Oversampler::latencyFrames()));
 }
 
-void testPassbandSineSurvivesRoundTrip() {
+TEST_CASE("passband sine survives the round trip", "[dsp]") {
     constexpr std::size_t kFrames = 4096;
     const auto in  = sine(kFrames, 1000.0, 0.5f);
     const auto out = roundTrip(in, 0.0f);
@@ -105,10 +107,10 @@ void testPassbandSineSurvivesRoundTrip() {
         worst = std::max(worst, std::fabs(static_cast<double>(out[i + lat]) -
                                           static_cast<double>(in[i])));
 
-    CHECK_NEAR(worst, 0.0, 2e-3);
+    CHECK_THAT(worst, WithinAbs(0.0, 2e-3));
 }
 
-void testOversamplingSuppressesFoldedHarmonic() {
+TEST_CASE("oversampling suppresses the folded harmonic", "[dsp]") {
     // 15 kHz driven into saturation. The 3rd harmonic sits at 45 kHz, which is
     // above the 24 kHz Nyquist, so at base rate it folds back to 48-45 = 3 kHz
     // -- an inharmonic tone a fifth below the fundamental, plainly audible.
@@ -136,15 +138,6 @@ void testOversamplingSuppressesFoldedHarmonic() {
     CHECK(goertzel(oversampled, kSkip, kAnalyse, kFund) > 0.1);
 
     const double reductionDb = 20.0 * std::log10(naiveAlias / osAlias);
-    std::printf("  folded 3 kHz: naive %.6f  oversampled %.6f  (%.1f dB better)\n",
-                naiveAlias, osAlias, reductionDb);
+    CAPTURE(naiveAlias, osAlias);
     CHECK(reductionDb > 20.0);
-}
-
-int main() {
-    RUN(testDcPassesThroughAtUnityGain);
-    RUN(testImpulsePeaksAtTheReportedLatency);
-    RUN(testPassbandSineSurvivesRoundTrip);
-    RUN(testOversamplingSuppressesFoldedHarmonic);
-    TEST_MAIN_END
 }

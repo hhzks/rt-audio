@@ -8,9 +8,11 @@
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <new>
@@ -34,8 +36,9 @@ void  operator delete(void* p, std::size_t)   noexcept { std::free(p); }
 void  operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
-void testEngineBlockDoesNotAllocate() {
+TEST_CASE("engine block does not allocate", "[engine]") {
     AudioEngine engine;
     engine.chain().add(std::make_unique<Biquad>(Biquad::Type::HighPass, 80.0, 0.707));
     engine.chain().add(std::make_unique<NoiseGate>(engine.params()));
@@ -61,12 +64,10 @@ void testEngineBlockDoesNotAllocate() {
         engine.processInterleaved(in.data(), out.data(), kBlock);
     g_trapArmed = false;
 
-    if (g_allocations.load() != 0)
-        std::printf("  >> %d allocation(s) inside processInterleaved\n", g_allocations.load());
     CHECK(g_allocations.load() == 0);
 }
 
-void testBypassPathDoesNotAllocate() {
+TEST_CASE("bypass path does not allocate", "[engine]") {
     AudioEngine engine;
     engine.chain().add(std::make_unique<Waveshaper>(engine.params()));
     engine.prepare(48000.0, 128, 2);
@@ -81,16 +82,16 @@ void testBypassPathDoesNotAllocate() {
 }
 
 // An oversized block must fail safe (silence + xrun), not read out of bounds.
-void testOversizedBlockIsSafe() {
+TEST_CASE("oversized block is safe", "[engine]") {
     AudioEngine engine;
     engine.prepare(48000.0, 64, 2);
     std::vector<float> in(512 * 2, 1.0f), out(512 * 2, 7.0f);
     engine.processInterleaved(in.data(), out.data(), 128);   // bigger than prepared
     CHECK(engine.stats().xruns.load() > 0);
-    CHECK_NEAR(out[0], 0.0, 1e-9);
+    CHECK_THAT(out[0], WithinAbs(0.0, 1e-9));
 }
 
-void testLoopbackProbeDoesNotAllocate() {
+TEST_CASE("loopback probe does not allocate", "[engine]") {
     SweepConfig cfg;
     cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
     cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
@@ -105,12 +106,4 @@ void testLoopbackProbeDoesNotAllocate() {
     for (int i = 0; i < 100; ++i) probe.process(in.data(), out.data(), 128);
     g_trapArmed = false;
     CHECK(g_allocations.load() == 0);
-}
-
-int main() {
-    RUN(testEngineBlockDoesNotAllocate);
-    RUN(testBypassPathDoesNotAllocate);
-    RUN(testOversizedBlockIsSafe);
-    RUN(testLoopbackProbeDoesNotAllocate);
-    TEST_MAIN_END
 }

@@ -2,7 +2,8 @@
 // accumulator creep, degenerates to a pure delay at ratio 1.0, and is clean
 // enough at 44.1 -> 48 to sit in a realtime capture path.
 #include "dsp/AsyncResampler.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <atomic>
 #include <cmath>
@@ -30,6 +31,7 @@ void  operator delete(void* p, std::size_t)   noexcept { std::free(p); }
 void  operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 
@@ -86,26 +88,26 @@ double thdPlusNoiseDb(const std::vector<float>& x, std::size_t start,
 
 // Every phase row must pass DC at unity, or the signal picks up a ripple at the
 // rate the phase cycles -- which at 44.1/48 is an audible ~3 kHz buzz.
-void testDcGainIsUnityAcrossPhases() {
+TEST_CASE("DC gain is unity across phases", "[dsp]") {
     const std::vector<float> in(20000, 0.5f);
     const auto out = run(in, kRatio441to48, 128);
 
     CHECK(out.size() > 1000);
     for (std::size_t i = 500; i < out.size() - 500; ++i)
-        CHECK_NEAR(out[i], 0.5, 1e-5);
+        CHECK_THAT(out[i], WithinAbs(0.5, 1e-5));
 }
 
-void testOutputCountTracksRatio() {
+TEST_CASE("output count tracks the ratio", "[dsp]") {
     const std::vector<float> in(44100, 0.0f);
     const auto out = run(in, kRatio441to48, 160);
 
     const double expected = 44100.0 / kRatio441to48;   // 48000
-    CHECK_NEAR(static_cast<double>(out.size()), expected, 4.0);
+    CHECK_THAT(static_cast<double>(out.size()), WithinAbs(expected, 4.0));
 }
 
 // At ratio 1.0 the only row used is phase 0, which the design collapses to a
 // unit impulse: the resampler must become a pure kTaps/2 delay, not "almost".
-void testUnityRatioIsPureDelay() {
+TEST_CASE("unity ratio is a pure delay", "[dsp]") {
     std::vector<float> in(4096);
     for (std::size_t i = 0; i < in.size(); ++i)
         in[i] = 0.4f * std::sin(0.037f * static_cast<float>(i));
@@ -115,10 +117,10 @@ void testUnityRatioIsPureDelay() {
 
     const auto d = idx(AsyncResampler::latencyFrames());
     for (std::size_t i = 0; i + d < in.size(); ++i)
-        CHECK_NEAR(out[i + d], in[i], 1e-5);
+        CHECK_THAT(out[i + d], WithinAbs(static_cast<double>(in[i]), 1e-5));
 }
 
-void testResampledSineIsClean() {
+TEST_CASE("resampled sine is clean", "[dsp]") {
     constexpr double kIn = 44100.0, kOut = 48000.0, kFreq = 1000.0;
 
     std::vector<float> in(static_cast<std::size_t>(kIn) * 2);
@@ -130,11 +132,10 @@ void testResampledSineIsClean() {
 
     // 48 samples per cycle at 48 kHz, so 48000 samples is exactly 1000 cycles.
     const double db = thdPlusNoiseDb(out, 2000, 48000, kFreq, kOut);
-    std::printf("  1 kHz 44.1->48 THD+N: %.1f dB\n", db);
     CHECK(db < -80.0);
 }
 
-void testProcessDoesNotAllocate() {
+TEST_CASE("process does not allocate", "[dsp]") {
     AsyncResampler rs;
     rs.prepare(2, kRatio441to48);   // allocation is allowed HERE
 
@@ -151,16 +152,5 @@ void testProcessDoesNotAllocate() {
     }
     g_trapArmed = false;
 
-    if (g_allocations.load() != 0)
-        std::printf("  >> %d allocation(s) inside process()\n", g_allocations.load());
     CHECK(g_allocations.load() == 0);
-}
-
-int main() {
-    RUN(testDcGainIsUnityAcrossPhases);
-    RUN(testOutputCountTracksRatio);
-    RUN(testUnityRatioIsPureDelay);
-    RUN(testResampledSineIsClean);
-    RUN(testProcessDoesNotAllocate);
-    TEST_MAIN_END
 }

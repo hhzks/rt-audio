@@ -1,10 +1,12 @@
 #include "dsp/Biquad.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cmath>
 #include <numbers>
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 
@@ -32,39 +34,39 @@ double magnitudeAt(Biquad& filter, double freqHz, double sampleRate) {
 
 } // namespace
 
-void testLowPassShape() {
+TEST_CASE("low-pass shape", "[dsp]") {
     constexpr double sr = 48000.0;
     Biquad lp(Biquad::Type::LowPass, 1000.0, 0.7071);
     lp.prepare(sr, 256, 1);
 
     // Passband ~unity, cutoff ~-3 dB, stopband rolls off.
-    CHECK_NEAR(magnitudeAt(lp, 100.0, sr),  1.0,   0.02);
-    CHECK_NEAR(magnitudeAt(lp, 1000.0, sr), 0.707, 0.03);
+    CHECK_THAT(magnitudeAt(lp, 100.0, sr),  WithinAbs(1.0,   0.02));
+    CHECK_THAT(magnitudeAt(lp, 1000.0, sr), WithinAbs(0.707, 0.03));
     CHECK(magnitudeAt(lp, 10000.0, sr) < 0.02);
 }
 
-void testHighPassShape() {
+TEST_CASE("high-pass shape", "[dsp]") {
     constexpr double sr = 48000.0;
     Biquad hp(Biquad::Type::HighPass, 1000.0, 0.7071);
     hp.prepare(sr, 256, 1);
 
     CHECK(magnitudeAt(hp, 50.0, sr) < 0.01);
-    CHECK_NEAR(magnitudeAt(hp, 1000.0, sr), 0.707, 0.03);
-    CHECK_NEAR(magnitudeAt(hp, 12000.0, sr), 1.0,  0.05);
+    CHECK_THAT(magnitudeAt(hp, 1000.0, sr),  WithinAbs(0.707, 0.03));
+    CHECK_THAT(magnitudeAt(hp, 12000.0, sr), WithinAbs(1.0,   0.05));
 }
 
-void testPeakGain() {
+TEST_CASE("peak gain", "[dsp]") {
     constexpr double sr = 48000.0;
     Biquad peak(Biquad::Type::Peak, 1000.0, 1.0, 6.0);   // +6 dB = x1.995
     peak.prepare(sr, 256, 1);
 
-    CHECK_NEAR(magnitudeAt(peak, 1000.0, sr), 1.995, 0.05);
-    CHECK_NEAR(magnitudeAt(peak, 50.0, sr),   1.0,   0.05);   // untouched far away
+    CHECK_THAT(magnitudeAt(peak, 1000.0, sr), WithinAbs(1.995, 0.05));
+    CHECK_THAT(magnitudeAt(peak, 50.0, sr),   WithinAbs(1.0,   0.05));   // untouched far away
 }
 
 // A filter that is stable will decay to silence after the input stops. An
 // unstable one blows up -- this catches coefficient sign errors immediately.
-void testStabilityAfterImpulse() {
+TEST_CASE("stable after an impulse", "[dsp]") {
     Biquad lp(Biquad::Type::LowPass, 200.0, 4.0);         // high Q, worst case
     lp.prepare(48000.0, 512, 1);
 
@@ -80,12 +82,4 @@ void testStabilityAfterImpulse() {
         std::fill(buf.begin(), buf.end(), 0.0f);
     }
     CHECK(tail < 1e-6);
-}
-
-int main() {
-    RUN(testLowPassShape);
-    RUN(testHighPassShape);
-    RUN(testPeakGain);
-    RUN(testStabilityAfterImpulse);
-    TEST_MAIN_END
 }

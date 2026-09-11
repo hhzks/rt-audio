@@ -3,12 +3,14 @@
 #include "core/Types.h"
 #include "core/AudioBufferView.h"
 #include "dsp/Biquad.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cstdint>
 #include <vector>
 
 using namespace rt;
+using Catch::Matchers::WithinAbs;
 
 namespace {
 std::vector<float> makeReference() {
@@ -26,37 +28,38 @@ std::vector<float> delayedCopy(const std::vector<float>& ref, int D) {
 }
 }
 
-void testCleanDelayRecovered() {
+TEST_CASE("clean delay is recovered", "[engine]") {
     const auto ref = makeReference();
     for (int D : {0, 1, 47, 480, 4800}) {
+        CAPTURE(D);
         const auto cap = delayedCopy(ref, D);
         const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
         CHECK(r.valid);
-        CHECK_NEAR(r.lagFrames, D, 0.5);
-        CHECK(!r.polarityInverted);
+        CHECK_THAT(r.lagFrames, WithinAbs(D, 0.5));
+        CHECK_FALSE(r.polarityInverted);
         CHECK(r.peakCorrelation > 0.99);
         CHECK(r.peakCorrelation < 1.001);
     }
 }
 
-void testAttenuationDoesNotMatter() {
+TEST_CASE("attenuation does not matter", "[engine]") {
     const auto ref = makeReference();
     auto cap = delayedCopy(ref, 512);
     for (auto& v : cap) v *= 0.01f;
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
-    CHECK_NEAR(r.lagFrames, 512, 0.5);
+    CHECK_THAT(r.lagFrames, WithinAbs(512, 0.5));
     CHECK(r.peakCorrelation > 0.99);
     CHECK(r.peakCorrelation < 1.001);
 }
 
-void testPolarityInversionDetected() {
+TEST_CASE("polarity inversion is detected", "[engine]") {
     const auto ref = makeReference();
     auto cap = delayedCopy(ref, 512);
     for (auto& v : cap) v = -v;
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
-    CHECK_NEAR(r.lagFrames, 512, 0.5);
+    CHECK_THAT(r.lagFrames, WithinAbs(512, 0.5));
     CHECK(r.polarityInverted);
 }
 
@@ -70,21 +73,22 @@ void addNoise(std::vector<float>& v, float amp, std::uint32_t seed) {
 }
 }
 
-void testSurvivesNoise() {
+TEST_CASE("survives noise", "[engine]") {
     const auto ref = makeReference();
     double prevPsr = 1e9;
     for (float noise : {0.05f, 0.15f, 0.5f}) {
+        CAPTURE(noise);
         auto cap = delayedCopy(ref, 512);
         addNoise(cap, noise, 12345u);
         const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
         CHECK(r.valid);
-        CHECK_NEAR(r.lagFrames, 512, 1.0);
+        CHECK_THAT(r.lagFrames, WithinAbs(512, 1.0));
         CHECK(r.peakToSidelobe < prevPsr);
         prevPsr = r.peakToSidelobe;
     }
 }
 
-void testHalfSampleDelay() {
+TEST_CASE("half-sample delay", "[engine]") {
     const auto ref = makeReference();
     const auto whole = delayedCopy(ref, 512);
     std::vector<float> cap(whole.size(), 0.0f);
@@ -92,10 +96,10 @@ void testHalfSampleDelay() {
         cap[i] = 0.5f * (whole[i] + whole[i - 1]);
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
     CHECK(r.valid);
-    CHECK_NEAR(r.lagFrames, 512.5, 0.25);
+    CHECK_THAT(r.lagFrames, WithinAbs(512.5, 0.25));
 }
 
-void testBandlimitedStillDetected() {
+TEST_CASE("band-limited signal is still detected", "[engine]") {
     const auto ref = makeReference();
     auto cap = delayedCopy(ref, 512);
     Biquad lp(Biquad::Type::LowPass, 4000.0, 0.707);
@@ -109,16 +113,16 @@ void testBandlimitedStillDetected() {
     CHECK(r.lagFrames <  520.0);
 }
 
-void testPureNoiseRejected() {
+TEST_CASE("pure noise is rejected", "[engine]") {
     const auto ref = makeReference();
     std::vector<float> cap(ref.size() + 9600, 0.0f);
     addNoise(cap, 0.5f, 999u);
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
-    CHECK(!r.valid);
-    CHECK(!r.rejectReason.empty());
+    CHECK_FALSE(r.valid);
+    CHECK_FALSE(r.rejectReason.empty());
 }
 
-void testCompetingPeakRejected() {
+TEST_CASE("competing peak is rejected", "[engine]") {
     const auto ref = makeReference();
     std::vector<float> cap(ref.size() + 9600, 0.0f);
     for (std::size_t i = 0; i < ref.size(); ++i) {
@@ -126,18 +130,6 @@ void testCompetingPeakRejected() {
         cap[800 + i] += 0.9f * ref[i];
     }
     const auto r = analyzeLatency(ref, cap, 9600, 48000.0);
-    CHECK(!r.valid);
+    CHECK_FALSE(r.valid);
     CHECK(r.rejectReason == "peak-to-sidelobe below 3.0");
-}
-
-int main() {
-    RUN(testCleanDelayRecovered);
-    RUN(testAttenuationDoesNotMatter);
-    RUN(testPolarityInversionDetected);
-    RUN(testSurvivesNoise);
-    RUN(testHalfSampleDelay);
-    RUN(testBandlimitedStillDetected);
-    RUN(testPureNoiseRejected);
-    RUN(testCompetingPeakRejected);
-    TEST_MAIN_END
 }

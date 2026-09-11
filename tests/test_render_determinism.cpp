@@ -8,7 +8,7 @@
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
-#include "TestHarness.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -57,7 +57,7 @@ constexpr std::uint64_t kExpectedHash = 0xe233a10e02dafd0full;
 
 } // namespace
 
-void testRenderIsBitIdenticalAcrossToolchains() {
+TEST_CASE("render is bit-identical across toolchains", "[engine]") {
     constexpr double     kRate     = 48000.0;
     constexpr FrameCount kBlock    = 128;
     constexpr int        kChannels = 2;
@@ -84,13 +84,5 @@ void testRenderIsBitIdenticalAcrossToolchains() {
                                   out.data() + pos * idx(kChannels), n);
     }
 
-    const std::uint64_t actual = hashBits(out);
-    if (actual != kExpectedHash)
-        std::printf("  actual hash = 0x%016llx\n", static_cast<unsigned long long>(actual));
-    CHECK(actual == kExpectedHash);
-}
-
-int main() {
-    RUN(testRenderIsBitIdenticalAcrossToolchains);
-    TEST_MAIN_END
+    CHECK(hashBits(out) == kExpectedHash);
 }
