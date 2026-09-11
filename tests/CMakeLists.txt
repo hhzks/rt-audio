@@ -38,6 +38,8 @@ rt_add_test(test_metering)
 rt_add_test(test_wasapi_error)
 rt_add_test(test_session)
 target_link_libraries(test_session PRIVATE rt_ffi)
+rt_add_test(test_ffi)
+target_link_libraries(test_ffi PRIVATE rt_ffi)
 
 if(UNIX)
     find_package(Threads REQUIRED)

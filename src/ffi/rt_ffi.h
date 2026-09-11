@@ -73,7 +73,7 @@ int32_t     rt_session_stop(rt_session* s);
 size_t      rt_session_last_error(const rt_session* s, char* buf, size_t cap);
 
 int32_t     rt_session_device(const rt_session* s, rt_device_desc* out);
-int32_t     rt_session_strip_count(const rt_session* s);
+int32_t     rt_session_strip_count(const rt_session* s);   /* count, or -1 for a NULL handle */
 int32_t     rt_session_strip(const rt_session* s, int32_t strip, rt_strip_desc* out);
 int32_t     rt_session_param(const rt_session* s, int32_t strip, int32_t param, rt_param_desc* out);
 int32_t     rt_session_set_param(rt_session* s, int32_t strip, int32_t param, double value);
