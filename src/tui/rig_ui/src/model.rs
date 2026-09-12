@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 
 pub const HIST_BUCKETS: usize = 322;
@@ -117,6 +118,66 @@ pub enum Outcome {
     Stopped(String),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LatencyKind {
+    #[default]
+    Control,
+    Measure,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LatencyState {
+    #[default]
+    Idle,
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LatencyPhase {
+    #[default]
+    Direct,
+    Chain,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LatencySettings {
+    pub repeats: i32,
+    pub amplitude: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LatencyRepeat {
+    pub lag_ms: f64,
+    pub correlation: f64,
+    pub psr: f64,
+    pub valid: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LatencyStatus {
+    pub state: LatencyState,
+    pub kind: LatencyKind,
+    pub phase: LatencyPhase,
+    pub repeat: i32,
+    pub repeats: i32,
+    pub latency_mode: bool,
+    pub control_passed: bool,
+    pub chain_valid: bool,
+    pub clipped: bool,
+    pub kept: i32,
+    pub discarded: i32,
+    pub measured_ms: f64,
+    pub spread_ms: f64,
+    pub computed_ms: f64,
+    pub chain_measured_ms: f64,
+    pub chain_reported_frames: i32,
+    pub direct: Vec<LatencyRepeat>,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub callbacks: u64,
@@ -194,6 +255,11 @@ pub trait Engine {
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
+    fn latency_enter(&mut self) -> Result<(), EngineError>;
+    fn latency_leave(&mut self) -> Result<(), EngineError>;
+    fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError>;
+    fn latency_cancel(&mut self) -> Result<(), EngineError>;
+    fn latency_status(&self) -> Result<LatencyStatus, EngineError>;
 }
 
 fn param(
@@ -244,6 +310,10 @@ pub struct FakeEngine {
     pub fail_ids: HashSet<String>,
     pub reconfigures: Vec<Config>,
     pub fail_devices: Option<EngineError>,
+    pub latency: RefCell<LatencyStatus>,
+    pub latency_script: RefCell<VecDeque<LatencyStatus>>,
+    pub latency_calls: Vec<String>,
+    pub fail_latency_start: Option<EngineError>,
 }
 
 fn entry(id: &str, name: &str, inputs: i32, outputs: i32) -> DeviceEntry {
@@ -344,6 +414,10 @@ impl FakeEngine {
             fail_ids: HashSet::new(),
             reconfigures: Vec::new(),
             fail_devices: None,
+            latency: RefCell::new(LatencyStatus::default()),
+            latency_script: RefCell::new(VecDeque::new()),
+            latency_calls: Vec::new(),
+            fail_latency_start: None,
         }
     }
 
@@ -444,6 +518,56 @@ impl Engine for FakeEngine {
             ));
         }
         Ok(self.stop("could not open the new config; could not restore the previous config"))
+    }
+
+    fn latency_enter(&mut self) -> Result<(), EngineError> {
+        self.latency_calls.push("enter".into());
+        let mut l = self.latency.borrow_mut();
+        let passed = l.control_passed;
+        *l = LatencyStatus {
+            latency_mode: true,
+            control_passed: passed,
+            ..LatencyStatus::default()
+        };
+        Ok(())
+    }
+
+    fn latency_leave(&mut self) -> Result<(), EngineError> {
+        self.latency_calls.push("leave".into());
+        let mut l = self.latency.borrow_mut();
+        l.latency_mode = false;
+        l.state = LatencyState::Idle;
+        Ok(())
+    }
+
+    fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError> {
+        self.latency_calls
+            .push(format!("start {kind:?} {} {:.3}", s.repeats, s.amplitude));
+        if let Some(e) = self.fail_latency_start.take() {
+            return Err(e);
+        }
+        let mut l = self.latency.borrow_mut();
+        if kind == LatencyKind::Measure && !l.control_passed {
+            return Err(EngineError::State("run the negative control first".into()));
+        }
+        l.state = LatencyState::Running;
+        l.kind = kind;
+        l.repeat = 1;
+        l.repeats = s.repeats;
+        l.message.clear();
+        Ok(())
+    }
+
+    fn latency_cancel(&mut self) -> Result<(), EngineError> {
+        self.latency_calls.push("cancel".into());
+        Ok(())
+    }
+
+    fn latency_status(&self) -> Result<LatencyStatus, EngineError> {
+        if let Some(next) = self.latency_script.borrow_mut().pop_front() {
+            *self.latency.borrow_mut() = next;
+        }
+        Ok(self.latency.borrow().clone())
     }
 }
 
@@ -586,5 +710,45 @@ mod tests {
         assert_eq!(e.devices().unwrap().len(), 3);
         e.fail_devices = Some(EngineError::Device("boom".into()));
         assert!(e.devices().is_err());
+    }
+
+    #[test]
+    fn fake_latency_follows_the_session_rules() {
+        let mut e = FakeEngine::rig();
+        let s = LatencySettings {
+            repeats: 5,
+            amplitude: 0.5,
+        };
+        e.latency_enter().unwrap();
+        assert!(e.latency_status().unwrap().latency_mode);
+        assert!(matches!(
+            e.latency_start(LatencyKind::Measure, s),
+            Err(EngineError::State(_))
+        ));
+        e.latency_start(LatencyKind::Control, s).unwrap();
+        assert_eq!(e.latency_status().unwrap().state, LatencyState::Running);
+
+        e.latency_script.borrow_mut().push_back(LatencyStatus {
+            state: LatencyState::Done,
+            latency_mode: true,
+            control_passed: true,
+            ..LatencyStatus::default()
+        });
+        assert!(e.latency_status().unwrap().control_passed);
+        e.latency_start(LatencyKind::Measure, s).unwrap();
+        e.latency_cancel().unwrap();
+        e.latency_leave().unwrap();
+        assert!(!e.latency_status().unwrap().latency_mode);
+        assert_eq!(
+            e.latency_calls,
+            [
+                "enter",
+                "start Measure 5 0.500",
+                "start Control 5 0.500",
+                "start Measure 5 0.500",
+                "cancel",
+                "leave"
+            ]
+        );
     }
 }

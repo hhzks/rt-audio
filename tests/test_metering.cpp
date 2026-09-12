@@ -90,3 +90,33 @@ TEST_CASE("clip counters are monotonic", "[engine]") {
     CHECK(engine.stats().inputClips.load() == 4);
     CHECK(engine.stats().outputClips.load() == 2);
 }
+
+TEST_CASE("monitor records meters and the callback", "[engine]") {
+    AudioEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    std::vector<float> in(64 * 2, 0.0f), out(64 * 2, 0.0f);
+    for (int i = 0; i < 64; ++i) { in[idx(i * 2)] = 0.8f; out[idx(i * 2 + 1)] = 0.3f; }
+    in[5]  = -1.0f;   // channel 1 at full scale: an input clip
+    out[8] = 1.5f;    // channel 0 over full scale: an output clip
+    const std::vector<float> before = out;
+    engine.monitor(in.data(), out.data(), 64);
+
+    auto& s = engine.stats();
+    CHECK(s.callbackCount.load() == 1);
+    CHECK_THAT(s.inputPeak[0].exchange(0.0f),  WithinAbs(0.8, 1e-6));
+    CHECK_THAT(s.inputPeak[1].exchange(0.0f),  WithinAbs(1.0, 1e-6));
+    CHECK_THAT(s.outputPeak[0].exchange(0.0f), WithinAbs(1.5, 1e-6));
+    CHECK_THAT(s.outputPeak[1].exchange(0.0f), WithinAbs(0.3, 1e-6));
+    CHECK(s.inputClips.load() == 1);
+    CHECK(s.outputClips.load() == 1);
+    CHECK(out == before);
+}
+
+TEST_CASE("monitor on an oversized block records an xrun", "[engine]") {
+    AudioEngine engine;
+    engine.prepare(48000.0, 64, 1);
+    std::vector<float> in(128, 0.5f), out(128, 0.5f);
+    engine.monitor(in.data(), out.data(), 128);
+    CHECK(engine.stats().xruns.load() == 1);
+    CHECK(engine.stats().callbackCount.load() == 0);
+}

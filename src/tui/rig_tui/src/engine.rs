@@ -2,13 +2,14 @@ use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use rig_ui::model::{
-    Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, Outcome, Param,
+    Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, LatencyKind,
+    LatencyPhase, LatencyRepeat, LatencySettings, LatencyState, LatencyStatus, Outcome, Param,
     Snapshot, Strip, Taper,
 };
 
 use crate::ffi::{
-    self, RtConfigDesc, RtDeviceDesc, RtDeviceInfo, RtOpenConfig, RtParamDesc, RtSession,
-    RtSnapshot, RtStripDesc,
+    self, RtConfigDesc, RtDeviceDesc, RtDeviceInfo, RtLatencySettings, RtLatencyStatus,
+    RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc,
 };
 
 const _: () = assert!(HIST_BUCKETS == ffi::RT_HIST_BUCKETS);
@@ -75,6 +76,55 @@ fn entry(d: &RtDeviceInfo) -> DeviceEntry {
         default_rate: d.default_sample_rate,
         default_in: d.is_default_input != 0,
         default_out: d.is_default_output != 0,
+    }
+}
+
+fn latency_status_from(raw: &RtLatencyStatus) -> LatencyStatus {
+    let state = match raw.state {
+        ffi::RT_LAT_RUNNING => LatencyState::Running,
+        ffi::RT_LAT_DONE => LatencyState::Done,
+        ffi::RT_LAT_FAILED => LatencyState::Failed,
+        ffi::RT_LAT_CANCELLED => LatencyState::Cancelled,
+        _ => LatencyState::Idle,
+    };
+    let kept = usize::try_from(raw.kept)
+        .unwrap_or(0)
+        .min(ffi::RT_LAT_MAX_REPEATS);
+    LatencyStatus {
+        state,
+        kind: if raw.kind == ffi::RT_LAT_MEASURE {
+            LatencyKind::Measure
+        } else {
+            LatencyKind::Control
+        },
+        phase: if raw.phase == ffi::RT_LAT_PHASE_CHAIN {
+            LatencyPhase::Chain
+        } else {
+            LatencyPhase::Direct
+        },
+        repeat: raw.repeat,
+        repeats: raw.repeats,
+        latency_mode: raw.latency_mode != 0,
+        control_passed: raw.control_passed != 0,
+        chain_valid: raw.chain_valid != 0,
+        clipped: raw.clipped != 0,
+        kept: raw.kept,
+        discarded: raw.discarded,
+        measured_ms: raw.measured_ms,
+        spread_ms: raw.spread_ms,
+        computed_ms: raw.computed_ms,
+        chain_measured_ms: raw.chain_measured_ms,
+        chain_reported_frames: raw.chain_reported_frames,
+        direct: raw.direct[..kept]
+            .iter()
+            .map(|r| LatencyRepeat {
+                lag_ms: r.lag_ms,
+                correlation: r.correlation,
+                psr: r.psr,
+                valid: r.valid != 0,
+            })
+            .collect(),
+        message: from_c_array(&raw.message),
     }
 }
 
@@ -319,5 +369,40 @@ impl Engine for FfiEngine {
             self.device = self.read_device()?;
         }
         Ok(result)
+    }
+
+    fn latency_enter(&mut self) -> Result<(), EngineError> {
+        // SAFETY: `self.s` is live.
+        self.check(unsafe { ffi::rt_session_latency_enter(self.s) })
+    }
+
+    fn latency_leave(&mut self) -> Result<(), EngineError> {
+        // SAFETY: `self.s` is live.
+        self.check(unsafe { ffi::rt_session_latency_leave(self.s) })
+    }
+
+    fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError> {
+        let settings = RtLatencySettings {
+            repeats: s.repeats,
+            amplitude: s.amplitude,
+        };
+        let k = match kind {
+            LatencyKind::Control => ffi::RT_LAT_CONTROL,
+            LatencyKind::Measure => ffi::RT_LAT_MEASURE,
+        };
+        // SAFETY: `self.s` is live; `settings` outlives the call.
+        self.check(unsafe { ffi::rt_session_latency_start(self.s, k, &settings) })
+    }
+
+    fn latency_cancel(&mut self) -> Result<(), EngineError> {
+        // SAFETY: `self.s` is live.
+        self.check(unsafe { ffi::rt_session_latency_cancel(self.s) })
+    }
+
+    fn latency_status(&self) -> Result<LatencyStatus, EngineError> {
+        let mut raw = Box::new(RtLatencyStatus::zeroed());
+        // SAFETY: `raw` is a valid, writable rt_latency_status.
+        self.check(unsafe { ffi::rt_session_latency_status(self.s, &mut *raw) })?;
+        Ok(latency_status_from(&raw))
     }
 }

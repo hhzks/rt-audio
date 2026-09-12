@@ -1,10 +1,17 @@
 #include "ffi/Session.h"
 #include "ffi/Utf8.h"
+#include "dsp/NoiseGate.h"
+#include "dsp/Waveshaper.h"
+#include "engine/LatencyRun.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <new>
+#include <sstream>
+#include <string>
 #include <utility>
 
 namespace rt {
@@ -23,6 +30,12 @@ constexpr std::array<ParamInfo, 3> kMasterInfo{{
     {"bypass",   "bypass", "",     0.0,  1.0, 0.0, Taper::Linear, kToggle},
 }};
 
+std::string formatMs(double ms) {
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(2) << ms;
+    return os.str();
+}
+
 } // namespace
 
 Session::Session() : Session(DeviceMaker([](Backend b) { return createAudioDevice(b); })) {}
@@ -32,7 +45,11 @@ Session::Session(DeviceMaker make) : master_(kMasterInfo), make_(std::move(make)
     applyMaster();
 }
 
-Session::~Session() { stop(); }
+Session::~Session() {
+    latencyCancel();
+    if (worker_.joinable()) worker_.join();
+    stop();
+}
 
 void Session::checkOpened() const {
     if (!opened_) throw SessionStateError("session is not open");
@@ -78,6 +95,7 @@ void Session::open(Backend backend, const DeviceConfig& config) {
 
 ReconfigureResult Session::reconfigure(const DeviceConfig& next) {
     checkOpened();
+    if (running_.load()) throw SessionStateError("a latency measurement is running");
     destroyDevice();
 
     const auto e1 = tryStart(next);
@@ -122,6 +140,214 @@ const DeviceConfig& Session::config() const {
 Backend Session::backend() const {
     checkOpened();
     return backend_;
+}
+
+void Session::latencyEnter() {
+    checkOpened();
+    if (running_.load()) throw SessionStateError("a latency measurement is running");
+    latencyMode_.store(true, std::memory_order_relaxed);
+    callback_.setMode(CallbackMode::Silent);
+    std::lock_guard lock(latencyMutex_);
+    latency_ = rt_latency_status{};
+}
+
+void Session::latencyLeave() {
+    checkOpened();
+    if (running_.load()) throw SessionStateError("a latency measurement is running");
+    latencyMode_.store(false, std::memory_order_relaxed);
+    callback_.setMode(CallbackMode::Normal);
+    std::lock_guard lock(latencyMutex_);
+    latency_ = rt_latency_status{};
+}
+
+void Session::latencyStart(LatencyKind kind, const LatencySettings& settings) {
+    checkOpened();
+    if (!latencyMode_.load(std::memory_order_relaxed))
+        throw SessionStateError("not in latency mode");
+    if (running_.load()) throw SessionStateError("a latency measurement is running");
+    if (!device_ || !device_->isRunning()) throw SessionStateError("the device is stopped");
+    if (settings.repeats < 1 || settings.repeats > RT_LAT_MAX_REPEATS)
+        throw SessionArgError("repeats must be between 1 and "
+                              + std::to_string(RT_LAT_MAX_REPEATS));
+    if (!std::isfinite(settings.amplitude) || settings.amplitude <= 0.0f
+        || settings.amplitude > 1.0f)
+        throw SessionArgError("amplitude must be in (0, 1]");
+    {
+        std::lock_guard lock(latencyMutex_);
+        if (kind == LatencyKind::Measure && !controlPassedLocked(config_))
+            throw SessionStateError("run the negative control first");
+        latency_ = rt_latency_status{};
+        latency_.state   = RT_LAT_RUNNING;
+        latency_.kind    = static_cast<std::int32_t>(kind);
+        latency_.phase   = RT_LAT_PHASE_DIRECT;
+        latency_.repeats = settings.repeats;
+    }
+    running_.store(true);
+    try {
+        worker_ = std::jthread([this, kind, settings](std::stop_token stop) {
+            runLatency(kind, settings, std::move(stop));
+        });
+    } catch (...) {
+        running_.store(false);
+        throw;
+    }
+}
+
+void Session::latencyCancel() noexcept { worker_.request_stop(); }
+
+void Session::latencyStatus(rt_latency_status& out) const {
+    checkOpened();
+    std::lock_guard lock(latencyMutex_);
+    out = latency_;
+    out.latency_mode   = static_cast<std::uint8_t>(latencyMode_.load(std::memory_order_relaxed));
+    out.control_passed = static_cast<std::uint8_t>(controlPassedLocked(config_));
+}
+
+bool Session::controlPassedLocked(const DeviceConfig& config) const {
+    const DevicePair pair{backend_, config.inputId, config.outputId};
+    return std::find(controlPassed_.begin(), controlPassed_.end(), pair) != controlPassed_.end();
+}
+
+std::uint64_t Session::dropoutCount() {
+    const DeviceStatus d = device_->status();
+    return d.captureOverruns + d.captureUnderruns + d.xruns
+         + engine_.stats().xruns.load(std::memory_order_relaxed);
+}
+
+void Session::drainCallbacks() noexcept {
+    const auto& count = engine_.stats().callbackCount;
+    const std::uint64_t start = count.load(std::memory_order_relaxed);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (count.load(std::memory_order_relaxed) < start + 2
+           && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
+void Session::runLatency(LatencyKind kind, LatencySettings settings, std::stop_token stop) {
+    const DeviceStatus st = device_->status();
+    const DevicePair pair{backend_, config_.inputId, config_.outputId};
+    const double bypass = master_.get(kBypass);
+    const double gateOn = rig_.gate->getParam(NoiseGate::kOn);
+    const double mix    = rig_.shaper->getParam(Waveshaper::kMix);
+    const double drive  = rig_.shaper->getParam(Waveshaper::kDrive);
+    bool neutral = false;
+    std::int32_t finalState = RT_LAT_FAILED;
+    std::string message;
+
+    try {
+        SweepConfig sweep;
+        sweep.amplitude = settings.amplitude;
+        probe_.prepare(st.sampleRate, st.blockFrames, st.numChannels, sweep);
+
+        PhaseConfig cfg;
+        cfg.repeats      = settings.repeats;
+        cfg.maxLagFrames = static_cast<int>(sweep.maxLatencySeconds * st.sampleRate);
+        cfg.sampleRate   = st.sampleRate;
+
+        std::int32_t phase = RT_LAT_PHASE_DIRECT;
+        PhaseHooks hooks;
+        hooks.dropouts  = [this] { return dropoutCount(); };
+        hooks.cancelled = [&stop] { return stop.stop_requested(); };
+        hooks.alive     = [this] { return device_->isRunning(); };
+        hooks.progress  = [this, &phase](PhaseEvent e, int repeat, int) {
+            if (e != PhaseEvent::Attempt) return;
+            std::lock_guard lock(latencyMutex_);
+            latency_.phase  = phase;
+            latency_.repeat = repeat;
+        };
+
+        callback_.setMode(CallbackMode::ProbeDirect);
+        const PhaseResult a = runPhase(probe_, cfg, hooks);
+        {
+            std::lock_guard lock(latencyMutex_);
+            latency_.kept        = static_cast<std::int32_t>(a.kept.size());
+            latency_.discarded   = a.discarded;
+            latency_.measured_ms = a.medianMs();
+            latency_.spread_ms   = a.spreadMs();
+            latency_.computed_ms = st.estimatedRoundTripMs;
+            latency_.clipped     = static_cast<std::uint8_t>(a.anyClipped);
+            const std::size_t n = std::min<std::size_t>(a.kept.size(), RT_LAT_MAX_REPEATS);
+            for (std::size_t i = 0; i < n; ++i) {
+                const LatencyResult& r = a.kept[i];
+                latency_.direct[i] = rt_latency_repeat{
+                    r.lagMs, r.peakCorrelation, r.peakToSidelobe,
+                    static_cast<std::uint8_t>(r.valid),
+                    static_cast<std::uint8_t>(r.polarityInverted)};
+            }
+        }
+
+        if (kind == LatencyKind::Control) {
+            std::lock_guard lock(latencyMutex_);
+            if (!a.enoughKept()) {
+                message = "too many xruns to trust the control";
+            } else if (a.anyValid()) {
+                double worst = 0.0;
+                for (const LatencyResult& r : a.kept)
+                    if (r.valid) worst = std::max(worst, r.lagMs);
+                message = "detected a peak at " + formatMs(worst)
+                        + " ms with no physical path; a software route (VoiceMeeter, Sonar, "
+                          "VB-Audio, a virtual cable or Stereo Mix) connects the devices";
+                std::erase(controlPassed_, pair);
+            } else {
+                if (std::find(controlPassed_.begin(), controlPassed_.end(), pair)
+                    == controlPassed_.end())
+                    controlPassed_.push_back(pair);
+                message = "control passed: no peak without a physical path";
+                finalState = RT_LAT_DONE;
+            }
+        } else if (!a.passedMajority()) {
+            message = std::to_string(a.kept.size()) + " of " + std::to_string(settings.repeats)
+                    + " repeats kept (" + std::to_string(a.discarded)
+                    + " discarded to xruns), " + std::to_string(a.validCount())
+                    + " found a peak. Raise the level, turn off direct monitoring, make sure "
+                      "the earcup touches the capsule.";
+        } else {
+            neutral = true;
+            master_.set(kBypass, 0.0);
+            applyMaster();
+            rig_.gate->setParam(NoiseGate::kOn, 0.0);
+            rig_.shaper->setParam(Waveshaper::kMix, 0.0);
+            rig_.shaper->setParam(Waveshaper::kDrive, 1.0);
+            phase = RT_LAT_PHASE_CHAIN;
+            callback_.setMode(CallbackMode::ProbeChain);
+            const PhaseResult b = runPhase(probe_, cfg, hooks);
+
+            std::lock_guard lock(latencyMutex_);
+            latency_.chain_valid = static_cast<std::uint8_t>(b.passedMajority());
+            if (b.passedMajority()) latency_.chain_measured_ms = b.medianMs() - a.medianMs();
+            latency_.chain_reported_frames =
+                static_cast<std::int32_t>(engine_.chain().totalLatencyFrames());
+            if (b.anyClipped) latency_.clipped = 1;
+            if (latency_.clipped != 0) message = "the capture clipped; lower the level";
+            finalState = RT_LAT_DONE;
+        }
+    } catch (const PhaseCancelled&) {
+        finalState = RT_LAT_CANCELLED;
+    } catch (const std::bad_alloc&) {
+        message = "out of memory";
+    } catch (const std::exception& e) {
+        message = e.what();
+    } catch (...) {
+        message = "unknown error";
+    }
+
+    // Run-end rule: after this, no callback is inside probe_.process(), so the next
+    // prepare() and arm() cannot race the audio thread.
+    callback_.setMode(CallbackMode::Silent);
+    drainCallbacks();
+    if (neutral) {
+        master_.set(kBypass, bypass);
+        applyMaster();
+        rig_.gate->setParam(NoiseGate::kOn, gateOn);
+        rig_.shaper->setParam(Waveshaper::kMix, mix);
+        rig_.shaper->setParam(Waveshaper::kDrive, drive);
+    }
+    {
+        std::lock_guard lock(latencyMutex_);
+        latency_.state = finalState;
+        copyUtf8Truncated(latency_.message, sizeof latency_.message, message);
+    }
+    running_.store(false);
 }
 
 std::size_t Session::stripCount() const noexcept { return 1 + engine_.chain().size(); }

@@ -1,6 +1,7 @@
 #include "engine/AudioEngine.h"
 #include "engine/LoopbackProbe.h"
 #include "engine/LatencyAnalyzer.h"
+#include "engine/LatencyRun.h"
 #include "dsp/RigChain.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
@@ -102,102 +103,38 @@ std::string escapeJson(const std::string& s) {
     return out;
 }
 
-double median(std::vector<double> v) {
-    if (v.empty()) return 0.0;
-    std::sort(v.begin(), v.end());
-    const std::size_t n = v.size();
-    return (n % 2 == 1) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
-}
+PhaseResult runToolPhase(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
+                         int repeats, int maxLagFrames, double sampleRate, const char* label) {
+    PhaseConfig cfg;
+    cfg.repeats      = repeats;
+    cfg.maxLagFrames = maxLagFrames;
+    cfg.sampleRate   = sampleRate;
 
-struct SweepAttempt {
-    LatencyResult result;
-    bool xrun    = false;
-    bool clipped = false;
-};
-
-std::uint64_t ringDropouts(const IAudioDevice& device) {
-    const DeviceStatus s = device.status();
-    return s.captureOverruns + s.captureUnderruns;
-}
-
-SweepAttempt runOneSweep(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
-                          int maxLagFrames, double sampleRate) {
-    const auto devXrunsBefore = ringDropouts(device);
-    const auto engXrunsBefore = engine ? engine->stats().xruns.load(std::memory_order_relaxed)
-                                        : std::uint64_t{0};
-
-    probe.arm();
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (probe.state() != ProbeState::Done) {
-        if (std::chrono::steady_clock::now() > deadline)
-            throw std::runtime_error("timed out waiting for the sweep to complete");
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    const auto devXrunsAfter = ringDropouts(device);
-    const auto engXrunsAfter = engine ? engine->stats().xruns.load(std::memory_order_relaxed)
-                                       : std::uint64_t{0};
-
-    SweepAttempt attempt;
-    attempt.xrun = (devXrunsAfter != devXrunsBefore) || (engXrunsAfter != engXrunsBefore);
-    for (float v : probe.captured())
-        if (std::fabs(v) >= 0.999f) { attempt.clipped = true; break; }
-
-    attempt.result = analyzeLatency(probe.reference(), probe.captured(), maxLagFrames, sampleRate);
-    return attempt;
-}
-
-struct PhaseResult {
-    std::vector<LatencyResult> kept;
-    bool anyClipped = false;
-    int  discarded  = 0;
-    int  requested  = 0;
-
-    int validCount() const {
-        int n = 0;
-        for (auto const& r : kept) if (r.valid) ++n;
+    PhaseHooks hooks;
+    hooks.dropouts = [&device, engine] {
+        const DeviceStatus s = device.status();
+        std::uint64_t n = s.captureOverruns + s.captureUnderruns + s.xruns;
+        if (engine != nullptr) n += engine->stats().xruns.load(std::memory_order_relaxed);
         return n;
-    }
-    bool anyValid() const {
-        for (auto const& r : kept) if (r.valid) return true;
-        return false;
-    }
-    bool passedMajority() const {
-        if (kept.empty()) return false;
-        if (static_cast<int>(kept.size()) < std::min(3, requested)) return false;
-        return validCount() * 2 > static_cast<int>(kept.size());
-    }
-};
-
-PhaseResult runPhase(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
-                      int repeats, int maxLagFrames, double sampleRate, const char* label) {
-    PhaseResult phase;
-    phase.requested = repeats;
-    for (int i = 0; i < repeats; ++i) {
-        SweepAttempt attempt;
-        int extra = 0;
-        for (;;) {
-            attempt = runOneSweep(device, probe, engine, maxLagFrames, sampleRate);
-            if (!attempt.xrun || extra >= 3) break;
-            std::cerr << "warning: " << label << " repeat " << (i + 1)
-                      << ": xrun during sweep, retrying (" << (extra + 1) << "/3)\n";
-            ++extra;
-        }
-        if (attempt.xrun) {
-            std::cerr << "warning: " << label << " repeat " << (i + 1)
+    };
+    hooks.progress = [label](PhaseEvent e, int repeat, int retry) {
+        switch (e) {
+        case PhaseEvent::Attempt:
+            if (retry > 0)
+                std::cerr << "warning: " << label << " repeat " << repeat
+                          << ": xrun during sweep, retrying (" << retry << "/3)\n";
+            break;
+        case PhaseEvent::Discarded:
+            std::cerr << "warning: " << label << " repeat " << repeat
                       << ": xrun persisted after 3 retries, discarding\n";
-            ++phase.discarded;
-            continue;
-        }
-        if (attempt.clipped) {
-            phase.anyClipped = true;
-            std::cerr << "warning: " << label << " repeat " << (i + 1)
+            break;
+        case PhaseEvent::Clipped:
+            std::cerr << "warning: " << label << " repeat " << repeat
                       << ": capture clipped (>= 0.999 magnitude)\n";
+            break;
         }
-        phase.kept.push_back(attempt.result);
-    }
-    return phase;
+    };
+    return runPhase(probe, cfg, hooks);
 }
 
 void printRepeats(const std::vector<LatencyResult>& results) {
@@ -370,12 +307,18 @@ int main(int argc, char** argv) {
         {
             device->start();
             StopGuard stopGuard(*device);
-            phaseA = runPhase(*device, probe, nullptr, repeats, maxLagFrames,
-                              st.sampleRate, "direct");
+            phaseA = runToolPhase(*device, probe, nullptr, repeats, maxLagFrames,
+                                  st.sampleRate, "direct");
             device->stop();
         }
 
         if (expectSilence) {
+            if (!phaseA.enoughKept()) {
+                std::cerr << "\nerror: too many xruns to trust the control ("
+                          << phaseA.kept.size() << " of " << repeats << " repeats kept).\n";
+                std::cout << "neg. control : FAIL\n";
+                return 1;
+            }
             if (phaseA.anyValid()) {
                 double worst = 0.0;
                 for (auto const& r : phaseA.kept) if (r.valid) worst = std::max(worst, r.lagMs);
@@ -409,18 +352,9 @@ int main(int argc, char** argv) {
         if (phaseA.anyClipped)
             std::cerr << "warning: capture clipped during at least one repeat; lower --amplitude.\n";
 
-        std::vector<double> lagMsValid;
-        for (auto const& r : phaseA.kept) if (r.valid) lagMsValid.push_back(r.lagMs);
-        const double measuredMs = median(lagMsValid);
-        const double spreadMs = *std::max_element(lagMsValid.begin(), lagMsValid.end())
-                               - *std::min_element(lagMsValid.begin(), lagMsValid.end());
-
-        const LatencyResult* rep = nullptr;
-        for (auto const& r : phaseA.kept) {
-            if (!r.valid) continue;
-            if (rep == nullptr || std::fabs(r.lagMs - measuredMs) < std::fabs(rep->lagMs - measuredMs))
-                rep = &r;
-        }
+        const double measuredMs = phaseA.medianMs();
+        const double spreadMs   = phaseA.spreadMs();
+        const LatencyResult* rep = phaseA.representative();
 
         const double computedMs = st.estimatedRoundTripMs;
         const double unaccountedMs = measuredMs - computedMs;
@@ -428,7 +362,7 @@ int main(int argc, char** argv) {
         std::cout << std::fixed << std::setprecision(2)
                   << "\ncomputed  (driver)   " << std::setw(6) << computedMs << " ms\n"
                   << "measured  (loopback) " << std::setw(6) << measuredMs << " ms   +/- "
-                  << (spreadMs / 2.0) << " ms  (" << lagMsValid.size() << " repeats, r "
+                  << (spreadMs / 2.0) << " ms  (" << phaseA.validCount() << " repeats, r "
                   << (rep ? rep->peakCorrelation : 0.0)
                   << ", PSR " << (rep ? rep->peakToSidelobe : 0.0) << ")\n"
                   << "unaccounted          " << std::setw(6) << unaccountedMs << " ms\n";
@@ -459,8 +393,8 @@ int main(int argc, char** argv) {
                 callback.setEngine(&engine);
                 device->start();
                 StopGuard stopGuard(*device);
-                phaseB = runPhase(*device, probe, &engine, repeats, maxLagFrames,
-                                  st.sampleRate, "chain");
+                phaseB = runToolPhase(*device, probe, &engine, repeats, maxLagFrames,
+                                      st.sampleRate, "chain");
                 device->stop();
                 callback.setEngine(nullptr);
             }
@@ -469,11 +403,8 @@ int main(int argc, char** argv) {
                 std::cerr << "warning: capture clipped during chain phase; lower --amplitude.\n";
 
             if (phaseB.passedMajority()) {
-                std::vector<double> lagMsB;
-                for (auto const& r : phaseB.kept) if (r.valid) lagMsB.push_back(r.lagMs);
-                const double measuredB = median(lagMsB);
-                const double spreadB = *std::max_element(lagMsB.begin(), lagMsB.end())
-                                      - *std::min_element(lagMsB.begin(), lagMsB.end());
+                const double measuredB = phaseB.medianMs();
+                const double spreadB   = phaseB.spreadMs();
                 chainMeasuredMs    = measuredB - measuredMs;
                 chainMeasuredValid = true;
 

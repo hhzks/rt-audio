@@ -8,7 +8,9 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
 use crate::app::{App, Mode, Row};
+use crate::latency::Step;
 use crate::meters::{FLOOR_DB, Meter};
+use crate::model::{LatencyKind, LatencyPhase, LatencyState};
 use crate::picker::{Field, PickerStatus, khz};
 use crate::stats::Status;
 use crate::taper;
@@ -21,7 +23,7 @@ const METER_W: u16 = 10;
 const HIST_W: u16 = 40;
 const SLIDER_W: usize = 16;
 
-const HELP: [(&str, &str); 13] = [
+const HELP: [(&str, &str); 14] = [
     ("space", "bypass the whole chain"),
     ("d / g", "drive / gate on or off"),
     ("enter", "selected strip on or off"),
@@ -33,6 +35,7 @@ const HELP: [(&str, &str); 13] = [
     ("t", "swap chain and histogram"),
     ("r", "reset stats"),
     ("o", "devices and stream settings"),
+    ("m", "measure latency"),
     ("q q", "quit"),
     ("ctrl+c", "quit now"),
 ];
@@ -84,6 +87,11 @@ pub fn draw(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     );
     if app.picker.is_some() {
         draw_picker(app, theme, cols[2], buf);
+        if wide {
+            draw_histogram(app, theme, cols[3], buf);
+        }
+    } else if app.latency.is_some() {
+        draw_latency(app, theme, cols[2], buf);
         if wide {
             draw_histogram(app, theme, cols[3], buf);
         }
@@ -204,11 +212,13 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     } else {
         String::new()
     };
-    let badge = if app.bypassed() {
-        format!("{} BYPASS  ", g.stopped)
-    } else {
-        String::new()
-    };
+    let mut badge = String::new();
+    if app.latency.as_ref().is_some_and(|l| l.status.latency_mode) {
+        badge += &format!("{} SILENT  ", g.stopped);
+    }
+    if app.bypassed() {
+        badge += &format!("{} BYPASS  ", g.stopped);
+    }
     let mut tail = format!(" {bar} xruns {}{marker} ", app.stats.dropouts());
 
     let w = |s: &str| s.chars().count();
@@ -723,6 +733,169 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     }
 }
 
+fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
+    let Some(l) = app.latency.as_ref() else {
+        return;
+    };
+    let inner = boxed(theme, "LATENCY", area, buf);
+    if inner.height < 12 || inner.width < 40 {
+        return;
+    }
+    let g = &theme.glyphs;
+    let sep = sep(theme);
+    let ell = ell(theme);
+    let width = usize::from(inner.width);
+    let normal = theme.style(Role::Normal);
+    let dim = theme.style(Role::Dim);
+    let x0 = inner.x;
+    let bottom = inner.y + inner.height;
+    let mut y = inner.y + 1;
+
+    let arrow = if theme.rich { " → " } else { " -> " };
+    let pair = format!(
+        "  {:<9}{}{arrow}{}",
+        "pair", app.device.input, app.device.output
+    );
+    put(buf, x0, y, &fit(&pair, width, ell), normal);
+    y += 1;
+
+    let control_failed =
+        l.status.kind == LatencyKind::Control && l.status.state == LatencyState::Failed;
+    let (control, role) = if l.status.control_passed {
+        ("passed", Role::Good)
+    } else if control_failed {
+        ("FAILED", Role::Bad)
+    } else {
+        ("not run", Role::Warn)
+    };
+    let x = put(buf, x0, y, &format!("  {:<9}", "control"), normal);
+    put(buf, x, y, control, theme.style(role));
+    y += 1;
+
+    let db = format!("{:.0}", l.level_db()).replace('-', g.minus);
+    put(
+        buf,
+        x0,
+        y,
+        &format!("  {:<9}{db} dBFS{sep}5 repeats", "sweep"),
+        normal,
+    );
+    y += 2;
+
+    let pm = if theme.rich { "±" } else { "+" };
+    let with_unaccounted = width >= 66;
+    let mut head = format!(
+        "  {:<22}{:<12}{:>7}{:>6}",
+        "config", "measured", "driver", "chain"
+    );
+    if with_unaccounted {
+        head += &format!("{:>8}", "unacc.");
+    }
+    put(buf, x0, y, &head, dim);
+    y += 1;
+
+    let rows_end = bottom.saturating_sub(4);
+    for r in app.latency_rows.iter().rev() {
+        if y >= rows_end {
+            break;
+        }
+        let chain = r
+            .chain_ms
+            .map_or_else(|| "n/a".to_owned(), |c| format!("{c:.2}"));
+        let mut line = format!(
+            "  {:<22}{:>7.2}{pm}{:<4.2}{:>7.2}{:>6}",
+            fit(&r.label, 22, ell),
+            r.measured_ms,
+            r.spread_ms,
+            r.computed_ms,
+            chain
+        );
+        if with_unaccounted {
+            line += &format!("{:>8.2}", r.unaccounted_ms());
+        }
+        if r.unstable {
+            line += " UNSTABLE";
+        } else if r.clipped {
+            line += " clip";
+        }
+        put(buf, x0, y, &line, normal);
+        y += 1;
+    }
+
+    let cursor = g.cursor;
+    let accent = theme.style(Role::Accent);
+    let warn = theme.style(Role::Warn);
+    let lines: Vec<(String, Style)> = match l.step {
+        Step::ConfirmControl => vec![
+            (
+                format!("{cursor} Move the headphones AWAY from the microphone."),
+                accent,
+            ),
+            (format!("  Enter start{sep}Esc back"), dim),
+        ],
+        Step::ConfirmMeasure => vec![
+            (
+                format!("{cursor} Put the headphones AGAINST the microphone."),
+                accent,
+            ),
+            (format!("  Enter start{sep}Esc back"), dim),
+        ],
+        Step::ConfirmLeave => vec![
+            (
+                format!("{cursor} Move the headphones AWAY from the microphone."),
+                accent,
+            ),
+            (
+                format!("  The rig's audio comes back.{sep}Enter leave{sep}Esc stay"),
+                dim,
+            ),
+        ],
+        Step::Running => {
+            let what = match (l.status.kind, l.status.phase) {
+                (LatencyKind::Control, _) => "control".to_owned(),
+                (LatencyKind::Measure, LatencyPhase::Direct) => format!("measuring{sep}direct"),
+                (LatencyKind::Measure, LatencyPhase::Chain) => format!("measuring{sep}chain"),
+            };
+            vec![
+                (
+                    format!(
+                        "  {what}{sep}repeat {}/{}",
+                        l.status.repeat.max(1),
+                        l.status.repeats
+                    ),
+                    warn,
+                ),
+                ("  Esc cancel".to_owned(), dim),
+            ]
+        }
+        Step::Home => {
+            if let Some(m) = &l.message {
+                wrap(m, width.saturating_sub(2), 3, ell)
+                    .into_iter()
+                    .map(|s| (format!("  {s}"), warn))
+                    .collect()
+            } else if app.latency_rows.last().is_some_and(|r| r.unstable) {
+                let lags: Vec<String> = l
+                    .status
+                    .direct
+                    .iter()
+                    .map(|d| format!("{:.2}", d.lag_ms))
+                    .collect();
+                vec![(
+                    fit(&format!("  repeats {}", lags.join(" ")), width, ell),
+                    dim,
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+    let prompt_y = bottom.saturating_sub(3);
+    for (i, (text, style)) in lines.iter().enumerate() {
+        put(buf, x0, prompt_y + i as u16, text, *style);
+    }
+}
+
 fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if let Some(m) = app.message() {
         put(buf, area.x + 1, area.y, m, theme.style(Role::Warn));
@@ -734,6 +907,8 @@ fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
             " {} field  {} change  R rescan  Esc close  qq quit",
             g.key_updown, g.key_leftright
         )
+    } else if app.mode() == Mode::Latency {
+        " c control  Enter measure  [ ] level  o devices  Esc leave".to_owned()
     } else {
         let rig = format!(
             " {} bypass  d drive  g gate  {} select  {} adjust  [ ] fine  ? help  qq quit",
@@ -1103,5 +1278,112 @@ mod tests {
         let t = Theme::new(true, ColorMode::None);
         assert!(!rows(&app, &t, 80, 24)[23].contains("o devices"));
         assert!(rows(&app, &t, 120, 30)[29].contains("o devices"));
+    }
+
+    use crate::latency::{LatencyRow, Step};
+    use crate::model::{LatencyKind, LatencyPhase};
+
+    fn latency_app(e: &mut FakeEngine) -> App {
+        let mut app = app_with(e);
+        let now = app.now;
+        app.update(Msg::OpenLatency, e, now).unwrap();
+        app
+    }
+
+    fn latency_row(label: &str, chain: Option<f64>, unstable: bool) -> LatencyRow {
+        LatencyRow {
+            label: label.into(),
+            measured_ms: 21.89,
+            spread_ms: 0.03,
+            computed_ms: 6.33,
+            chain_ms: chain,
+            unstable,
+            clipped: false,
+        }
+    }
+
+    #[test]
+    fn latency_panel_at_80x24() {
+        let mut e = FakeEngine::rig();
+        let mut app = latency_app(&mut e);
+        app.latency.as_mut().unwrap().status.control_passed = true;
+        app.latency_rows
+            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
+        app.latency_rows
+            .push(latency_row("shared 1056 fr 48 kHz", None, true));
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(has(&r, "LATENCY") && !has(&r, "CHAIN"));
+        assert!(r[0].contains("■ SILENT"), "{}", r[0]);
+        assert!(has(&r, "pair     synthetic tone → discard"));
+        assert!(has(&r, "control  passed"));
+        assert!(has(&r, "sweep    −6 dBFS · 5 repeats"));
+        assert!(has(&r, "excl 144 fr 48 kHz") && has(&r, "21.89±0.03"));
+        assert!(has(&r, "n/a UNSTABLE"));
+        assert!(!has(&r, "unacc."));
+        assert!(r[23].contains("c control"), "{}", r[23]);
+    }
+
+    #[test]
+    fn latency_panel_basic_glyphs_stay_in_the_console_font() {
+        const SAFE: &str = "─│┌┐└┘├┤┬┴┼█▄▀▌▐░▒▓";
+        let mut e = FakeEngine::rig();
+        let mut app = latency_app(&mut e);
+        app.latency_rows
+            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
+        let r = rows(&app, &Theme::new(false, ColorMode::None), 80, 24);
+        for line in &r {
+            for c in line.chars() {
+                assert!(c.is_ascii() || SAFE.contains(c), "{c:?} in {line:?}");
+            }
+        }
+        assert!(r[0].contains("# SILENT"), "{}", r[0]);
+        assert!(has(&r, "synthetic tone -> discard"));
+        assert!(has(&r, "21.89+0.03"));
+        assert!(has(&r, "control  not run"));
+    }
+
+    #[test]
+    fn latency_prompts_and_progress() {
+        let mut e = FakeEngine::rig();
+        let mut app = latency_app(&mut e);
+        let t = Theme::new(true, ColorMode::None);
+
+        app.latency.as_mut().unwrap().step = Step::ConfirmMeasure;
+        let r = rows(&app, &t, 80, 24);
+        assert!(has(&r, "▸ Put the headphones AGAINST the microphone."));
+        assert!(has(&r, "Enter start · Esc back"));
+
+        let s = app.latency.as_mut().unwrap();
+        s.step = Step::Running;
+        s.status.kind = LatencyKind::Measure;
+        s.status.phase = LatencyPhase::Chain;
+        s.status.repeat = 2;
+        s.status.repeats = 5;
+        assert!(has(
+            &rows(&app, &t, 80, 24),
+            "measuring · chain · repeat 2/5"
+        ));
+
+        let s = app.latency.as_mut().unwrap();
+        s.step = Step::Home;
+        s.message = Some("run the negative control first (c)".into());
+        assert!(has(
+            &rows(&app, &t, 80, 24),
+            "run the negative control first (c)"
+        ));
+    }
+
+    #[test]
+    fn the_unaccounted_column_needs_room() {
+        let mut e = FakeEngine::rig();
+        let mut app = latency_app(&mut e);
+        app.latency_rows
+            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
+        let t = Theme::new(true, ColorMode::None);
+        let r100 = rows(&app, &t, 100, 30);
+        assert!(has(&r100, "unacc.") && has(&r100, "15.56"));
+        let r120 = rows(&app, &t, 120, 30);
+        assert!(!has(&r120, "unacc."));
+        assert!(has(&r120, "CALLBACK TIME") && has(&r120, "LATENCY"));
     }
 }

@@ -2,8 +2,11 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
+use crate::latency::{Action, Key, LatencyRow, LatencyScreen, Step};
 use crate::meters::{ClipLatch, Meter};
-use crate::model::{Config, Device, Engine, EngineError, HIST_BUCKETS, Outcome, Snapshot, Strip};
+use crate::model::{
+    Config, Device, Engine, EngineError, HIST_BUCKETS, LatencySettings, Outcome, Snapshot, Strip,
+};
 use crate::picker::{Picker, PickerStatus};
 use crate::stats::{Stats, Status};
 use crate::taper;
@@ -17,6 +20,7 @@ pub const RETRY_EVERY: Duration = Duration::from_secs(2);
 pub enum Mode {
     Rig,
     Picker,
+    Latency,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +42,10 @@ pub enum Msg {
     OpenPicker,
     ClosePicker,
     Rescan,
+    OpenLatency,
+    StartControl,
+    LevelDown,
+    LevelUp,
     Quit,
     QuitNow,
 }
@@ -63,6 +71,18 @@ pub fn map_key(ev: &Event, mode: Mode) -> Option<Msg> {
             _ => return None,
         });
     }
+    if mode == Mode::Latency {
+        return Some(match k.code {
+            KeyCode::Char('c') => Msg::StartControl,
+            KeyCode::Enter => Msg::ToggleSelected,
+            KeyCode::Esc => Msg::CloseOverlay,
+            KeyCode::Char('[') => Msg::LevelDown,
+            KeyCode::Char(']') => Msg::LevelUp,
+            KeyCode::Char('o') => Msg::OpenPicker,
+            KeyCode::Char('q') => Msg::Quit,
+            _ => return None,
+        });
+    }
     Some(match k.code {
         KeyCode::Up | KeyCode::Char('k') => Msg::Up,
         KeyCode::Down | KeyCode::Char('j') => Msg::Down,
@@ -79,6 +99,7 @@ pub fn map_key(ev: &Event, mode: Mode) -> Option<Msg> {
         KeyCode::Char('t') => Msg::SwapPanel,
         KeyCode::Char('r') => Msg::ResetStats,
         KeyCode::Char('o') => Msg::OpenPicker,
+        KeyCode::Char('m') => Msg::OpenLatency,
         KeyCode::Char('?') => Msg::Help,
         KeyCode::Esc => Msg::CloseOverlay,
         KeyCode::Char('q') => Msg::Quit,
@@ -113,6 +134,8 @@ pub struct App {
     pub picker: Option<Picker>,
     pub switching: bool,
     pub launch_config: Config,
+    pub latency: Option<LatencyScreen>,
+    pub latency_rows: Vec<LatencyRow>,
     message: Option<(String, Instant)>,
     quit_armed: Option<Instant>,
     pending: Option<(Config, Instant)>,
@@ -160,6 +183,8 @@ impl App {
             picker: None,
             switching: false,
             launch_config: engine.config().clone(),
+            latency: None,
+            latency_rows: Vec::new(),
             message: None,
             quit_armed: None,
             pending: None,
@@ -171,6 +196,8 @@ impl App {
     pub fn mode(&self) -> Mode {
         if self.picker.is_some() {
             Mode::Picker
+        } else if self.latency.is_some() {
+            Mode::Latency
         } else {
             Mode::Rig
         }
@@ -190,6 +217,18 @@ impl App {
             Msg::Up | Msg::Down | Msg::Coarse(_) if self.picker.is_some() => {
                 self.picker_key(msg, now);
             }
+            Msg::StartControl
+            | Msg::ToggleSelected
+            | Msg::CloseOverlay
+            | Msg::LevelDown
+            | Msg::LevelUp
+            | Msg::OpenPicker
+                if self.picker.is_none() && self.latency.is_some() =>
+            {
+                self.latency_key(msg, engine)?;
+            }
+            Msg::OpenLatency => self.open_latency(engine)?,
+            Msg::StartControl | Msg::LevelDown | Msg::LevelUp => {}
             Msg::Up => self.selected = self.selected.saturating_sub(1),
             Msg::Down => {
                 if self.selected + 1 < self.rows.len() {
@@ -275,7 +314,11 @@ impl App {
         let retry_due = self
             .last_retry
             .is_none_or(|t| now.saturating_duration_since(t) >= RETRY_EVERY);
-        if self.picker.is_none() && self.status() == Status::Stopped && retry_due {
+        let run_active = self
+            .latency
+            .as_ref()
+            .is_some_and(|l| l.step == Step::Running);
+        if self.picker.is_none() && !run_active && self.status() == Status::Stopped && retry_due {
             self.last_retry = Some(now);
             self.retrying = true;
             return Some(engine.config().clone());
@@ -332,6 +375,46 @@ impl App {
         let now = engine.config();
         (*now != self.launch_config)
             .then(|| format!("rt-rig: to start with this config: {}", now.command_line()))
+    }
+
+    pub fn quit_table(&self) -> Option<String> {
+        if self.latency_rows.is_empty() {
+            return None;
+        }
+        let mut s = String::from("rt-rig latency results\n");
+        s += &format!(
+            "{:<24} {:>11} {:>8} {:>11} {:>9}\n",
+            "config", "measured ms", "spread", "driver ms", "chain ms"
+        );
+        for r in &self.latency_rows {
+            let chain = r
+                .chain_ms
+                .map_or_else(|| "n/a".to_owned(), |c| format!("{c:.2}"));
+            let flag = if r.unstable {
+                "  UNSTABLE"
+            } else if r.clipped {
+                "  clip"
+            } else {
+                ""
+            };
+            s += &format!(
+                "{:<24} {:>11.2} {:>8.2} {:>11.2} {:>9}{flag}\n",
+                r.label, r.measured_ms, r.spread_ms, r.computed_ms, chain
+            );
+        }
+        s.pop();
+        Some(s)
+    }
+
+    pub fn poll_latency(&mut self, engine: &dyn Engine) -> Result<(), EngineError> {
+        let Some(screen) = self.latency.as_mut() else {
+            return Ok(());
+        };
+        let status = engine.latency_status()?;
+        if let Some(row) = screen.ingest(status) {
+            self.latency_rows.push(row);
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> Status {
@@ -408,6 +491,96 @@ impl App {
         self.stats = Stats::new();
     }
 
+    fn open_latency(&mut self, engine: &mut dyn Engine) -> Result<(), EngineError> {
+        match engine.latency_enter() {
+            Ok(()) => {
+                self.help = false;
+                self.latency = Some(LatencyScreen::new());
+                Ok(())
+            }
+            Err(e @ EngineError::Internal(_)) => Err(e),
+            Err(e) => {
+                self.flash(&e.to_string());
+                Ok(())
+            }
+        }
+    }
+
+    fn latency_key(&mut self, msg: Msg, engine: &mut dyn Engine) -> Result<(), EngineError> {
+        let key = match msg {
+            Msg::StartControl => Key::Control,
+            Msg::ToggleSelected => Key::Enter,
+            Msg::CloseOverlay => Key::Esc,
+            Msg::LevelDown => Key::LevelDown,
+            Msg::LevelUp => Key::LevelUp,
+            Msg::OpenPicker => Key::Devices,
+            _ => return Ok(()),
+        };
+        let running = self.snapshot.running;
+        let (action, amplitude) = {
+            let Some(screen) = self.latency.as_mut() else {
+                return Ok(());
+            };
+            (screen.key(key, running), screen.amplitude())
+        };
+        match action {
+            Action::None => Ok(()),
+            Action::OpenPicker => {
+                self.open_picker(engine);
+                Ok(())
+            }
+            Action::Start(kind) => {
+                let settings = LatencySettings {
+                    repeats: 5,
+                    amplitude,
+                };
+                match engine.latency_start(kind, settings) {
+                    Ok(()) => {
+                        let config = engine.config().clone();
+                        let device = self.device.clone();
+                        if let Some(screen) = self.latency.as_mut() {
+                            screen.started(config, device);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => self.latency_error(e),
+                }
+            }
+            Action::Cancel => match engine.latency_cancel() {
+                Ok(()) => Ok(()),
+                Err(e) => self.latency_error(e),
+            },
+            Action::Leave => match engine.latency_leave() {
+                Ok(()) => {
+                    self.latency = None;
+                    Ok(())
+                }
+                Err(e) => self.latency_error(e),
+            },
+        }
+    }
+
+    // A state error is not a UI bug here: the device can stop between the check and the call.
+    fn latency_error(&mut self, e: EngineError) -> Result<(), EngineError> {
+        match e {
+            EngineError::Arg(_) => {
+                if cfg!(debug_assertions) {
+                    panic!("latency call rejected: {e}");
+                }
+                self.flash(&format!("internal: {e}"));
+                Ok(())
+            }
+            EngineError::State(m) | EngineError::Device(m) => {
+                if let Some(s) = self.latency.as_mut() {
+                    s.step = Step::Home;
+                    s.message = Some(m);
+                }
+                Ok(())
+            }
+            EngineError::Internal(_) => Err(e),
+        }
+    }
+
     fn set(
         &mut self,
         engine: &mut dyn Engine,
@@ -477,6 +650,9 @@ mod tests {
 
     use crate::picker::{Field, PickerStatus};
     use crate::stats::Status;
+
+    use crate::latency::{LatencyRow, Step};
+    use crate::model::{LatencyKind, LatencyState, LatencyStatus};
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -895,5 +1071,154 @@ mod tests {
             app.quit_line(&e).as_deref(),
             Some("rt-rig: to start with this config: rt_rig --backend null --in 'mic' --block 128")
         );
+    }
+
+    #[test]
+    fn latency_keymap() {
+        use KeyCode::*;
+        let cases = [
+            (Char('c'), Msg::StartControl),
+            (Enter, Msg::ToggleSelected),
+            (Esc, Msg::CloseOverlay),
+            (Char('['), Msg::LevelDown),
+            (Char(']'), Msg::LevelUp),
+            (Char('o'), Msg::OpenPicker),
+            (Char('q'), Msg::Quit),
+        ];
+        for (code, msg) in cases {
+            assert_eq!(map_key(&key(code), Mode::Latency), Some(msg), "{code:?}");
+        }
+        for code in [Char(' '), Char('d'), Char('r'), Char('m'), Up] {
+            assert_eq!(map_key(&key(code), Mode::Latency), None, "{code:?}");
+        }
+        assert_eq!(map_key(&key(Char('m')), Mode::Rig), Some(Msg::OpenLatency));
+    }
+
+    #[test]
+    fn opening_the_screen_enters_latency_mode_first() {
+        let (mut e, mut app, t0) = setup();
+        app.help = true;
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        assert_eq!(e.latency_calls, ["enter"]);
+        assert_eq!(app.mode(), Mode::Latency);
+        assert!(!app.help);
+    }
+
+    #[test]
+    fn a_control_then_a_measure_adds_one_row() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        app.update(Msg::StartControl, &mut e, t0).unwrap();
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap();
+        assert_eq!(
+            e.latency_calls.last().map(String::as_str),
+            Some("start Control 5 0.501")
+        );
+        assert_eq!(app.latency.as_ref().unwrap().step, Step::Running);
+
+        e.latency_script.borrow_mut().push_back(LatencyStatus {
+            state: LatencyState::Done,
+            kind: LatencyKind::Control,
+            latency_mode: true,
+            control_passed: true,
+            ..LatencyStatus::default()
+        });
+        app.poll_latency(&e).unwrap();
+        assert!(app.latency_rows.is_empty());
+        assert_eq!(app.latency.as_ref().unwrap().step, Step::Home);
+
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap(); // Home -> ConfirmMeasure
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap(); // start
+        e.latency_script.borrow_mut().push_back(LatencyStatus {
+            state: LatencyState::Done,
+            kind: LatencyKind::Measure,
+            latency_mode: true,
+            control_passed: true,
+            measured_ms: 10.0,
+            computed_ms: 5.0,
+            ..LatencyStatus::default()
+        });
+        app.poll_latency(&e).unwrap();
+        app.poll_latency(&e).unwrap();
+        assert_eq!(app.latency_rows.len(), 1);
+        assert_eq!(app.latency_rows[0].label, "null 128 fr 48 kHz");
+    }
+
+    #[test]
+    fn leaving_needs_the_confirm() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        app.update(Msg::CloseOverlay, &mut e, t0).unwrap();
+        assert_eq!(e.latency_calls, ["enter"]);
+        assert_eq!(app.mode(), Mode::Latency);
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap();
+        assert_eq!(e.latency_calls, ["enter", "leave"]);
+        assert_eq!(app.mode(), Mode::Rig);
+    }
+
+    #[test]
+    fn the_picker_from_the_screen_returns_to_it() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        assert_eq!(app.mode(), Mode::Picker);
+        app.update(Msg::ClosePicker, &mut e, t0).unwrap();
+        assert_eq!(app.mode(), Mode::Latency);
+    }
+
+    #[test]
+    fn no_retry_while_a_run_is_active() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        app.update(Msg::StartControl, &mut e, t0).unwrap();
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap();
+        e.next.running = false;
+        ingest(&mut app, &mut e, t0);
+        assert!(app.due(&e, t0).is_none());
+        app.latency.as_mut().unwrap().step = Step::Home;
+        assert!(app.due(&e, t0).is_some());
+    }
+
+    #[test]
+    fn a_state_error_from_start_is_a_message() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenLatency, &mut e, t0).unwrap();
+        app.update(Msg::StartControl, &mut e, t0).unwrap();
+        e.fail_latency_start = Some(EngineError::State("the device is stopped".into()));
+        app.update(Msg::ToggleSelected, &mut e, t0).unwrap();
+        let s = app.latency.as_ref().unwrap();
+        assert_eq!(s.step, Step::Home);
+        assert_eq!(s.message.as_deref(), Some("the device is stopped"));
+    }
+
+    #[test]
+    fn the_quit_table_lists_the_rows() {
+        let (_, mut app, _) = setup();
+        assert_eq!(app.quit_table(), None);
+        app.latency_rows.push(LatencyRow {
+            label: "excl 144 fr 48 kHz".into(),
+            measured_ms: 21.89,
+            spread_ms: 0.06,
+            computed_ms: 6.33,
+            chain_ms: Some(0.41),
+            unstable: false,
+            clipped: false,
+        });
+        app.latency_rows.push(LatencyRow {
+            label: "shared 1056 fr 48 kHz".into(),
+            measured_ms: 131.23,
+            spread_ms: 1.5,
+            computed_ms: 44.33,
+            chain_ms: None,
+            unstable: true,
+            clipped: false,
+        });
+        let table = app.quit_table().unwrap();
+        let lines: Vec<&str> = table.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "rt-rig latency results");
+        assert!(lines[2].starts_with("excl 144 fr 48 kHz"));
+        assert!(lines[2].contains("21.89") && lines[2].contains("0.41"));
+        assert!(lines[3].contains("n/a") && lines[3].ends_with("UNSTABLE"));
     }
 }

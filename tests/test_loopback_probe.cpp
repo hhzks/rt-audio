@@ -1,5 +1,6 @@
 #include "engine/LoopbackProbe.h"
 #include "engine/LatencyAnalyzer.h"
+#include "DelayLine.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
@@ -9,6 +10,7 @@
 
 using namespace rt;
 using Catch::Matchers::WithinAbs;
+using rt::testing::DelayLine;
 
 namespace {
 int zeroCrossings(const std::vector<float>& v, std::size_t from, std::size_t to) {
@@ -17,31 +19,6 @@ int zeroCrossings(const std::vector<float>& v, std::size_t from, std::size_t to)
         if ((v[i - 1] < 0.0f) != (v[i] < 0.0f)) ++n;
     return n;
 }
-
-class DelayLine {
-public:
-    DelayLine(int delayFrames, int channels)
-        : buf_(idx(delayFrames * channels), 0.0f), ch_(channels) {}
-
-    void read(float* dst, FrameCount n) noexcept {
-        for (std::size_t i = 0; i < idx(n * ch_); ++i) {
-            dst[i] = buf_[pos_];
-            pos_ = (pos_ + 1) % buf_.size();
-        }
-        pos_ = readStart_;
-    }
-    void write(const float* src, FrameCount n) noexcept {
-        for (std::size_t i = 0; i < idx(n * ch_); ++i) {
-            buf_[readStart_] = src[i];
-            readStart_ = (readStart_ + 1) % buf_.size();
-        }
-        pos_ = readStart_;
-    }
-private:
-    std::vector<float> buf_;
-    int ch_;
-    std::size_t pos_ = 0, readStart_ = 0;
-};
 }
 
 TEST_CASE("sweep length and bounds", "[engine]") {
