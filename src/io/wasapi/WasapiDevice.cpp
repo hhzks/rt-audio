@@ -409,6 +409,7 @@ void WasapiDevice::close() {
 DeviceStatus WasapiDevice::status() const {
     DeviceStatus s = status_;
     s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
+    s.captureUnderruns = captureUnderruns_.load(std::memory_order_relaxed);
     s.xruns = xruns_.load(std::memory_order_relaxed);
     const long hr = lastHr_.load(std::memory_order_relaxed);
     if (hr != 0) {
@@ -481,12 +482,17 @@ bool WasapiDevice::fillRender() noexcept {
 
     BYTE* out = nullptr;
     const HRESULT hrGet = renderService_->GetBuffer(framesToWrite, &out);
-    if (FAILED(hrGet)) return !fatal(hrGet);
+    if (FAILED(hrGet)) {
+        if (fatal(hrGet)) return false;
+        xruns_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
 
     const int         ch   = config_.numChannels;
     const std::size_t need = static_cast<std::size_t>(framesToWrite) * idx(ch);
 
-    captureRing_.popOrZero(engineIn_.data(), need);
+    if (captureRing_.popOrZero(engineIn_.data(), need))
+        captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
 
     callback_->audioDeviceProcess(engineIn_.data(), engineOut_.data(),
                                   static_cast<FrameCount>(framesToWrite));

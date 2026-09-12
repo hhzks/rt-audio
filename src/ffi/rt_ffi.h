@@ -54,7 +54,7 @@ typedef struct {
 } rt_device_desc;
 
 typedef struct {
-    uint64_t callbacks, engine_xruns, device_xruns, capture_overruns;  /* monotonic */
+    uint64_t callbacks, engine_xruns, device_xruns, capture_overruns, capture_underruns;  /* monotonic */
     uint64_t in_clips, out_clips;                                      /* monotonic */
     uint64_t deadline_ns;
     uint64_t hist_window[RT_HIST_BUCKETS];      /* drained since the previous snapshot */

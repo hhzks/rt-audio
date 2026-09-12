@@ -71,6 +71,7 @@ private:
     std::thread       thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> captureOverruns_{0};
+    std::atomic<std::uint64_t> captureUnderruns_{0};
     std::atomic<std::uint64_t> xruns_{0};
     std::atomic<long>          lastHr_{0};
     HANDLE            shutdownEvent_ = nullptr;

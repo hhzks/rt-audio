@@ -52,6 +52,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_snapshot, engine_xruns);
     FIELD(rt_snapshot, device_xruns);
     FIELD(rt_snapshot, capture_overruns);
+    FIELD(rt_snapshot, capture_underruns);
     FIELD(rt_snapshot, in_clips);
     FIELD(rt_snapshot, out_clips);
     FIELD(rt_snapshot, deadline_ns);

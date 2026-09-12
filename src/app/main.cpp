@@ -150,6 +150,8 @@ int main(int argc, char** argv) {
         std::cout << std::fixed << std::setprecision(2)
                   << "\n\ntotal callbacks: " << engine.stats().callbackCount.load()
                   << "   xruns: " << engine.stats().xruns.load()
+                  << "   capture overruns: " << device->status().captureOverruns
+                  << "   underruns: " << device->status().captureUnderruns
                   << "   run p99.9 " << static_cast<double>(cumulative.nsAtPercentile(0.999)) / 1000.0 << "us"
                   << "   max " << static_cast<double>(engine.stats().peakCallbackNanos.load(std::memory_order_relaxed)) / 1000.0 << "us";
         if (cumulative.overflow() != 0) std::cout << "   overflow " << cumulative.overflow();
