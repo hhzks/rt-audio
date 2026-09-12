@@ -348,7 +348,7 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     captureRing_.reset(maxBlock * idx(engineCh) * 4);
 
     resampler_.prepare(engineCh, nominalRatio_);
-    drift_.prepare(captureRing_.capacity() / 2, 0.002);
+    ringTargetFrames_ = captureRing_.capacity() / 2 / idx(engineCh);
 
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
@@ -386,6 +386,12 @@ void WasapiDevice::start() {
     if (running_.exchange(true)) return;
     if (thread_.joinable()) thread_.join();   // a thread that stopped on a fatal error
     lastHr_.store(0, std::memory_order_relaxed);
+
+    const std::size_t ch = idx(config_.numChannels);
+    primeRing(captureRing_, ringTargetFrames_, ch);
+    resampler_.reset();
+    drift_.prepare(ringTargetFrames_ * ch, 0.002);
+
     ResetEvent(shutdownEvent_);
     thread_ = std::thread(&WasapiDevice::threadMain, this);
 }

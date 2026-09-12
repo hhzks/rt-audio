@@ -64,6 +64,23 @@ TEST_CASE("popOrZero signals underrun", "[core]") {
     CHECK_THAT(out[3], WithinAbs(0.0, 1e-9));
 }
 
+TEST_CASE("pushSilence writes zeros up to the free space", "[core]") {
+    SpscRingBuffer ring;
+    ring.reset(8);                       // capacity 8, usable 7
+    const float ones[7] = { 1, 1, 1, 1, 1, 1, 1 };
+    float sink[7] = {};
+    ring.push(ones, 7);
+    ring.pop(sink, 7);                   // every slot now holds 1.0
+
+    CHECK(ring.pushSilence(5) == 5);
+    CHECK(ring.pushSilence(5) == 2);     // must refuse, never overwrite
+    CHECK(ring.readAvailable() == 7);
+
+    float out[7] = { 9, 9, 9, 9, 9, 9, 9 };
+    CHECK(ring.pop(out, 7) == 7);
+    for (int i = 0; i < 7; ++i) CHECK_THAT(out[i], WithinAbs(0.0, 0.0));
+}
+
 TEST_CASE("discard drops the oldest samples", "[core]") {
     SpscRingBuffer ring;
     ring.reset(16);

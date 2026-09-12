@@ -1,7 +1,10 @@
 #include "core/RingPush.h"
+#include "core/DriftController.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -103,4 +106,38 @@ TEST_CASE("never exceeds capacity", "[core]") {
         pushEvictingOldest(ring, b.data(), b.size(), kCh);
         CHECK(ring.readAvailable() < ring.capacity());
     }
+}
+
+TEST_CASE("priming replaces stale samples with silence up to the target", "[core]") {
+    SpscRingBuffer ring;
+    ring.reset(192 * kCh * 4);
+    const auto stale = makeBlock(100);
+    ring.push(stale.data(), stale.size());
+
+    primeRing(ring, 256, kCh);
+
+    CHECK(ring.readAvailable() == 256 * kCh);
+    const auto out = drain(ring);
+    CHECK(std::all_of(out.begin(), out.end(), [](float v) { return v == 0.0f; }));
+}
+
+TEST_CASE("a primed ring starts the drift loop at zero error", "[core]") {
+    constexpr std::size_t kFrames = 144, kTargetFrames = 288;
+    SpscRingBuffer ring;
+    ring.reset(kFrames * kCh * 4);
+    DriftController drift;
+
+    primeRing(ring, kTargetFrames, kCh);
+    drift.prepare(kTargetFrames * kCh, 0.002);
+
+    const auto block = makeBlock(kFrames);
+    std::vector<float> out(block.size());
+    double worst = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        worst = std::max(worst, std::fabs(drift.update(ring.readAvailable()) - 1.0));
+        pushEvictingOldest(ring, block.data(), block.size(), kCh);
+        ring.popOrZero(out.data(), out.size());
+    }
+    CAPTURE(worst);
+    CHECK(worst < 1e-12);
 }
