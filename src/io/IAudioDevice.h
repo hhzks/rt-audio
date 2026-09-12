@@ -32,6 +32,8 @@ struct DeviceConfig {
     FrameCount  blockFrames   = 0;      // 0 = ask the driver for its minimum
     int         numChannels   = 2;      // what the ENGINE runs at
     bool        exclusiveMode = false;  // WASAPI exclusive; ignored elsewhere
+
+    bool operator==(const DeviceConfig&) const = default;
 };
 
 // What we actually got, which is often not what we asked for.

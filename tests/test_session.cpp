@@ -139,3 +139,27 @@ TEST_CASE("UTF-8 truncation keeps whole code points", "[ffi]") {
     CHECK(buf[0] == '\0');
     CHECK(copyUtf8Truncated(buf, 0, src) == 0);
 }
+
+TEST_CASE("backend keys round-trip and resolve", "[session]") {
+    for (Backend b : {Backend::Wasapi, Backend::Asio, Backend::Alsa, Backend::Null}) {
+        const auto parsed = backendFromName(backendKey(b));
+        REQUIRE(parsed.has_value());
+        CHECK(*parsed == b);
+        CHECK(resolveBackend(b) == b);
+    }
+    CHECK(resolveBackend(Backend::Default) != Backend::Default);
+#if defined(_WIN32)
+    CHECK(resolveBackend(Backend::Default) == Backend::Wasapi);
+#endif
+}
+
+TEST_CASE("device configs compare by value", "[session]") {
+    const DeviceConfig a = nullConfig();
+    DeviceConfig b = nullConfig();
+    CHECK(a == b);
+    b.outputId = "x";
+    CHECK(!(a == b));
+    b = a;
+    b.exclusiveMode = true;
+    CHECK(!(a == b));
+}
