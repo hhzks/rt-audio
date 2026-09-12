@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and attach, for example v0.1.0
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/scripts/third_party_notices.py
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || (github.event_name == 'push' && github.ref_name) || '' }}
+
+jobs:
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout packaging files
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 ninja-build libasound2-dev
+
+      - name: Install Rust toolchain
+        working-directory: src/src/tui
+        run: rustup toolchain install
+
+      - name: Configure
+        working-directory: src
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: cmake --preset linux
+
+      - name: Build
+        working-directory: src
+        run: cmake --build --preset linux
+
+      - name: Test
+        working-directory: src
+        run: ctest --test-dir build/linux --output-on-failure
+
+      - name: Package
+        id: package
+        run: |
+          version="${TAG#v}"
+          [ -n "$TAG" ] || version="dev-${GITHUB_SHA::7}"
+          name="rt-audio-${version}-linux-x64"
+          b=src/build/linux
+          mkdir "$name"
+          cp "$b/src/tui/rt_rig" "$b/src/app/rt_audio" \
+             "$b/tools/offline_render/offline_render" \
+             "$b/tools/loopback_latency/loopback_latency" "$name/"
+          strip "$name"/*
+          cp src/README.md ci/LICENSE "$name/"
+          python3 ci/.github/scripts/third_party_notices.py src/src/tui "$name"
+          tar -czf "$name.tar.gz" "$name"
+          echo "archive=$name.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout packaging files
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Add LLVM to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8
+
+      - name: Install Rust toolchain
+        working-directory: src/src/tui
+        run: rustup toolchain install
+
+      - name: Configure
+        working-directory: src
+        run: cmake --preset windows-clang-cl
+
+      - name: Build
+        working-directory: src
+        run: cmake --build --preset windows-clang-cl
+
+      - name: Test
+        working-directory: src
+        run: ctest --test-dir build/windows-clang --output-on-failure
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $version = if ($env:TAG) { $env:TAG.TrimStart('v') } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          $name = "rt-audio-$version-windows-x64"
+          $b = 'src/build/windows-clang'
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item -Destination $name -Path "$b/src/tui/rt_rig.exe", "$b/src/app/rt_audio.exe",
+              "$b/tools/offline_render/offline_render.exe",
+              "$b/tools/loopback_latency/loopback_latency.exe", 'src/README.md', 'ci/LICENSE'
+          python ci/.github/scripts/third_party_notices.py src/src/tui $name
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "archive=$name.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Attach to release
+    needs: [linux, windows]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 ||
+            gh release create "$TAG" --verify-tag --title "rt-audio ${TAG#v}" --generate-notes
+          gh release upload "$TAG" dist/* --clobber

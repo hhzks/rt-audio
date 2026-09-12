@@ -56,3 +56,7 @@ keys; `q q` quits.
   `TERM=linux` it uses a reduced glyph set; `--glyphs` and `--color` override the detection.
 - Over SSH, run it inside `tmux`, so a dropped connection does not stop the audio.
 - `--fps 15` reduces CPU use on small boards.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
