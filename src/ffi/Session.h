@@ -8,9 +8,13 @@
 #include "io/IAudioDevice.h"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace rt {
 
@@ -24,17 +28,28 @@ public:
     using std::invalid_argument::invalid_argument;
 };
 
+enum class ReconfigureResult { Applied = 0, RolledBack = 1, Stopped = 2 };
+
 // One caller thread only. Strip 0 is Master; strips 1..n are the rig chain.
 class Session {
 public:
+    using DeviceMaker = std::function<std::unique_ptr<IAudioDevice>(Backend)>;
+
     Session();
+    explicit Session(DeviceMaker make);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
     void open(Backend backend, const DeviceConfig& config);
+    ReconfigureResult reconfigure(const DeviceConfig& next);
+    std::vector<DeviceInfo> enumerate();
     void stop() noexcept;
-    bool isOpen() const noexcept { return device_ != nullptr; }
+    bool isOpen() const noexcept { return opened_; }
+
+    const DeviceConfig& config() const;
+    Backend             backend() const;
+    const std::string&  reconfigureMessage() const noexcept { return message_; }
 
     std::size_t                stripCount() const noexcept;
     const char*                stripName(std::size_t strip) const;
@@ -52,12 +67,22 @@ private:
 
     const IEffect& effect(std::size_t strip) const;
     void checkParam(std::size_t strip, std::size_t param) const;
+    void checkOpened() const;
     void applyMaster() noexcept;
+    std::unique_ptr<IAudioDevice> makeAndStart(const DeviceConfig& config);
+    std::optional<std::string>    tryStart(const DeviceConfig& config);
+    void destroyDevice() noexcept;
 
     AudioEngine                   engine_;      // declared first, destroyed last
     RigChain                      rig_{};
     EngineCallback                callback_{engine_};
     ParamBlock<3>                 master_;
+    DeviceMaker                   make_;
+    Backend                       backend_ = Backend::Null;
+    DeviceConfig                  config_{};
+    std::string                   stopReason_;
+    std::string                   message_;
+    bool                          opened_ = false;
     std::unique_ptr<IAudioDevice> device_;      // declared last, destroyed first: joins the device thread
 };
 

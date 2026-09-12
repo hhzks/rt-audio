@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <new>
 #include <utility>
 
 namespace rt {
@@ -24,26 +25,103 @@ constexpr std::array<ParamInfo, 3> kMasterInfo{{
 
 } // namespace
 
-Session::Session() : master_(kMasterInfo) {
+Session::Session() : Session(DeviceMaker([](Backend b) { return createAudioDevice(b); })) {}
+
+Session::Session(DeviceMaker make) : master_(kMasterInfo), make_(std::move(make)) {
     rig_ = buildRigChain(engine_.chain());
     applyMaster();
 }
 
 Session::~Session() { stop(); }
 
-void Session::open(Backend backend, const DeviceConfig& config) {
-    if (device_) throw SessionStateError("session is already open");
-    auto device = createAudioDevice(backend);
+void Session::checkOpened() const {
+    if (!opened_) throw SessionStateError("session is not open");
+}
+
+std::unique_ptr<IAudioDevice> Session::makeAndStart(const DeviceConfig& config) {
+    auto device = make_(backend_);
+    if (!device) throw std::runtime_error("device factory returned no device");
     device->open(config, &callback_);
     const DeviceStatus st = device->status();
     engine_.prepare(st.sampleRate, st.blockFrames, st.numChannels);
     device->start();
-    device_ = std::move(device);
+    return device;
+}
+
+std::optional<std::string> Session::tryStart(const DeviceConfig& config) {
+    try {
+        device_ = makeAndStart(config);
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (const std::exception& e) {
+        return std::string(e.what());
+    } catch (...) {
+        return std::string("unknown error");
+    }
+    return std::nullopt;
+}
+
+void Session::destroyDevice() noexcept {
+    if (!device_) return;
+    try { device_->stop(); } catch (...) {}
+    try { device_->close(); } catch (...) {}
+    device_.reset();
+}
+
+void Session::open(Backend backend, const DeviceConfig& config) {
+    if (opened_) throw SessionStateError("session is already open");
+    backend_ = resolveBackend(backend);
+    device_  = makeAndStart(config);
+    config_  = config;
+    opened_  = true;
+}
+
+ReconfigureResult Session::reconfigure(const DeviceConfig& next) {
+    checkOpened();
+    destroyDevice();
+
+    const auto e1 = tryStart(next);
+    if (!e1) {
+        config_ = next;
+        stopReason_.clear();
+        message_.clear();
+        return ReconfigureResult::Applied;
+    }
+    if (next == config_) {
+        stopReason_ = message_ = "could not reopen the device: " + *e1;
+        return ReconfigureResult::Stopped;
+    }
+    const std::string first = "could not open the new config: " + *e1;
+    const auto e2 = tryStart(config_);
+    if (!e2) {
+        stopReason_.clear();
+        message_ = first + "; restored the previous config";
+        return ReconfigureResult::RolledBack;
+    }
+    stopReason_ = message_ = first + "; could not restore the previous config: " + *e2;
+    return ReconfigureResult::Stopped;
+}
+
+std::vector<DeviceInfo> Session::enumerate() {
+    checkOpened();
+    auto probe = make_(backend_);
+    if (!probe) throw std::runtime_error("device factory returned no device");
+    return probe->enumerate();
 }
 
 void Session::stop() noexcept {
     if (!device_) return;
     try { device_->stop(); } catch (...) {}
+}
+
+const DeviceConfig& Session::config() const {
+    checkOpened();
+    return config_;
+}
+
+Backend Session::backend() const {
+    checkOpened();
+    return backend_;
 }
 
 std::size_t Session::stripCount() const noexcept { return 1 + engine_.chain().size(); }
@@ -100,24 +178,25 @@ void Session::applyMaster() noexcept {
 }
 
 DeviceStatus Session::deviceStatus() const {
-    if (!device_) throw SessionStateError("session is not open");
+    checkOpened();
+    if (!device_) throw SessionStateError("no device is open: " + stopReason_);
     return device_->status();
 }
 
 void Session::snapshot(rt_snapshot& out) {
-    if (!device_) throw SessionStateError("session is not open");
+    checkOpened();
     out = rt_snapshot{};
 
     RtStats& s = engine_.stats();
-    const DeviceStatus ds = device_->status();
-    out.callbacks        = s.callbackCount.load(std::memory_order_relaxed);
-    out.engine_xruns     = s.xruns.load(std::memory_order_relaxed);
-    out.device_xruns     = ds.xruns;
-    out.capture_overruns = ds.captureOverruns;
+    const DeviceStatus ds = device_ ? device_->status() : DeviceStatus{};
+    out.callbacks         = s.callbackCount.load(std::memory_order_relaxed);
+    out.engine_xruns      = s.xruns.load(std::memory_order_relaxed);
+    out.device_xruns      = ds.xruns;
+    out.capture_overruns  = ds.captureOverruns;
     out.capture_underruns = ds.captureUnderruns;
-    out.in_clips         = s.inputClips.load(std::memory_order_relaxed);
-    out.out_clips        = s.outputClips.load(std::memory_order_relaxed);
-    out.deadline_ns      = s.blockDeadlineNanos.load(std::memory_order_relaxed);
+    out.in_clips          = s.inputClips.load(std::memory_order_relaxed);
+    out.out_clips         = s.outputClips.load(std::memory_order_relaxed);
+    out.deadline_ns       = s.blockDeadlineNanos.load(std::memory_order_relaxed);
 
     const HistogramSnapshot h = s.callbackNanos.drain();
     for (std::size_t b = 0; b < h.counts.size(); ++b) out.hist_window[b] = h.counts[b];
@@ -135,8 +214,9 @@ void Session::snapshot(rt_snapshot& out) {
         for (std::size_t p = 0; p < n; ++p) out.params[st][p] = getParam(st, p);
     }
 
-    out.running = static_cast<std::uint8_t>(device_->isRunning() ? 1 : 0);
-    copyUtf8Truncated(out.device_error, sizeof out.device_error, ds.lastError);
+    out.running = static_cast<std::uint8_t>(device_ && device_->isRunning() ? 1 : 0);
+    copyUtf8Truncated(out.device_error, sizeof out.device_error,
+                      device_ ? ds.lastError : stopReason_);
 }
 
 } // namespace rt
