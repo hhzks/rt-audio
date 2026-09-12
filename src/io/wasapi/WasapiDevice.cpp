@@ -470,11 +470,13 @@ bool WasapiDevice::drainCapture() noexcept {
 }
 
 bool WasapiDevice::fillRender() noexcept {
-    UINT32 padding = 0;
-    const HRESULT hrPad = render_.client->GetCurrentPadding(&padding);
-    if (FAILED(hrPad)) return !fatal(hrPad);
+    const RenderFrames rf = wasapiRenderFrames(
+        config_.exclusiveMode, render_.bufferFrames, [this](std::uint32_t& padding) {
+            return static_cast<std::int32_t>(render_.client->GetCurrentPadding(&padding));
+        });
+    if (rf.hr < 0) return !fatal(rf.hr);
 
-    const UINT32 framesToWrite = render_.bufferFrames - padding;
+    const UINT32 framesToWrite = rf.frames;
     if (framesToWrite == 0) return true;
 
     BYTE* out = nullptr;

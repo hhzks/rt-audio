@@ -4,6 +4,7 @@
 #include "io/IAudioDevice.h"
 #include "io/wasapi/ComPtr.h"
 #include "io/wasapi/WasapiError.h"
+#include "io/wasapi/WasapiRender.h"
 #include "core/SampleConvert.h"
 #include "core/SpscRingBuffer.h"
 #include "core/DriftController.h"
