@@ -433,8 +433,8 @@ bool WasapiDevice::fatal(HRESULT hr) noexcept {
     return true;
 }
 
-bool WasapiDevice::drainCapture() noexcept {
-    for (;;) {
+bool WasapiDevice::drainCapture(int maxPackets) noexcept {
+    for (int n = 0; n < maxPackets; ++n) {
         UINT32 packetFrames = 0;
         const HRESULT hrSize = captureService_->GetNextPacketSize(&packetFrames);
         if (FAILED(hrSize)) return !fatal(hrSize);
@@ -476,6 +476,7 @@ bool WasapiDevice::drainCapture() noexcept {
         captureStarted_ = true;
         captureService_->ReleaseBuffer(frames);
     }
+    return true;
 }
 
 bool WasapiDevice::fillRender() noexcept {
@@ -542,8 +543,14 @@ void WasapiDevice::threadMain() {
             continue;
         }
 
-        if (r == WAIT_OBJECT_0 + 2) { if (!drainCapture()) break; continue; }
-        if (r == WAIT_OBJECT_0 + 1) { if (!drainCapture() || !fillRender()) break; continue; }
+        if (r == WAIT_OBJECT_0 + 2) {
+            if (!drainCapture(wasapiCaptureReads(config_.exclusiveMode, true))) break;
+            continue;
+        }
+        if (r == WAIT_OBJECT_0 + 1) {
+            if (!drainCapture(wasapiCaptureReads(config_.exclusiveMode, false)) || !fillRender()) break;
+            continue;
+        }
         break;                                   // WAIT_FAILED
     }
 

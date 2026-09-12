@@ -41,6 +41,16 @@ TEST_CASE("a failed padding query returns its HRESULT and no frames", "[io]") {
     CHECK(r.frames == 0u);
 }
 
+TEST_CASE("exclusive capture reads one buffer per capture event and none on render events", "[io]") {
+    CHECK(wasapiCaptureReads(true, true) == 1);
+    CHECK(wasapiCaptureReads(true, false) == 0);
+}
+
+TEST_CASE("shared capture drains every packet on both events", "[io]") {
+    CHECK(wasapiCaptureReads(false, true) == kCaptureDrainAll);
+    CHECK(wasapiCaptureReads(false, false) == kCaptureDrainAll);
+}
+
 TEST_CASE("ring target is two of the larger buffers, not a rounded capacity", "[io]") {
     CHECK(wasapiRingTargetFrames(1056, 1056) == 2112u);
     CHECK(wasapiRingTargetFrames(144, 144) == 288u);

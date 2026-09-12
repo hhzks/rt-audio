@@ -55,7 +55,7 @@ private:
     void initEndpoint(Endpoint& ep, EDataFlow flow, const std::string& id,
                       FrameCount requestedFrames, bool exclusive);
     void threadMain();
-    bool drainCapture() noexcept;   // false: fatal error, stop the thread
+    bool drainCapture(int maxPackets) noexcept;   // false: fatal error, stop the thread
     bool fillRender() noexcept;
     bool fatal(HRESULT hr) noexcept;
 
