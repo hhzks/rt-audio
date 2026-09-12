@@ -1,10 +1,12 @@
 #include "ffi/rt_ffi.h"
+#include "ffi/DeviceInfoCopy.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <thread>
 
 using Catch::Matchers::WithinAbs;
@@ -154,4 +156,121 @@ TEST_CASE("histogram functions match the engine", "[ffi]") {
     CHECK(rt_hist_percentile_ns(nullptr, 0.5) == 0);
     uint64_t empty[RT_HIST_BUCKETS] = {};
     CHECK(rt_hist_percentile_ns(empty, 0.99) == 0);
+}
+
+TEST_CASE("enumerate reports the total and fills up to cap", "[ffi]") {
+    rt_session* s = rt_session_create();
+    int32_t total = -1;
+    rt_device_info info[4]{};
+    CHECK(rt_session_enumerate(s, info, 4, &total) == RT_E_STATE);
+
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_enumerate(s, nullptr, 0, &total) == RT_OK);
+    CHECK(total == 1);
+    CHECK(rt_session_enumerate(s, info, 4, &total) == RT_OK);
+    CHECK(total == 1);
+    CHECK(std::strcmp(info[0].id, "null") == 0);
+    CHECK(info[0].max_input_channels == 2);
+    CHECK(info[0].is_default_output == 1);
+
+    CHECK(rt_session_enumerate(s, info, 4, nullptr) == RT_E_ARG);
+    CHECK(rt_session_enumerate(s, nullptr, 1, &total) == RT_E_ARG);
+    CHECK(rt_session_enumerate(s, info, -1, &total) == RT_E_ARG);
+    CHECK(rt_session_enumerate(nullptr, info, 4, &total) == RT_E_ARG);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("config reports the requested values", "[ffi]") {
+    rt_session* s = rt_session_create();
+    rt_config_desc c{};
+    CHECK(rt_session_config(s, &c) == RT_E_STATE);
+
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_config(s, nullptr) == RT_E_ARG);
+    CHECK(rt_session_config(s, &c) == RT_OK);
+    CHECK(std::strcmp(c.backend, "null") == 0);
+    CHECK(c.input_id[0] == '\0');
+    CHECK(c.output_id[0] == '\0');
+    CHECK_THAT(c.sample_rate, WithinAbs(48000.0, 1e-9));
+    CHECK(c.block_frames == 256);
+    CHECK(c.exclusive == 0);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("reconfigure over the C ABI", "[ffi]") {
+    rt_session* s = rt_session_create();
+    rt_open_config cfg = nullConfig();
+    int32_t outcome = -1;
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_STATE);
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+
+    cfg.block_frames = 512;
+    CHECK(rt_session_reconfigure(s, &cfg, nullptr) == RT_E_ARG);
+    CHECK(rt_session_reconfigure(s, nullptr, &outcome) == RT_E_ARG);
+    CHECK(rt_session_reconfigure(nullptr, &cfg, &outcome) == RT_E_ARG);
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
+    CHECK(outcome == RT_RECONF_APPLIED);
+    rt_device_desc dev{};
+    CHECK(rt_session_device(s, &dev) == RT_OK);
+    CHECK(dev.block_frames == 512);
+
+    cfg.backend = nullptr;
+    cfg.block_frames = 128;
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
+
+#if defined(_WIN32)
+    cfg.backend = "wasapi";
+#else
+    cfg.backend = "alsa";
+#endif
+    char buf[128];
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
+    CHECK(rt_session_last_error(s, buf, sizeof buf) > 0);
+    CHECK(std::string(buf).find("backend") != std::string::npos);
+    cfg.backend = "nosuch";
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("device ids that do not fit are rejected", "[ffi]") {
+    rt_session* s = rt_session_create();
+    const std::string longId(RT_ID_BYTES, 'x');
+    rt_open_config cfg = nullConfig();
+    cfg.input_id = longId.c_str();
+    CHECK(rt_session_open(s, &cfg) == RT_E_ARG);
+
+    cfg.input_id = nullptr;
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    int32_t outcome = -1;
+    cfg.output_id = longId.c_str();
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
+
+    const std::string maxId(RT_ID_BYTES - 1, 'y');
+    cfg.output_id = maxId.c_str();
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);   // the Null device ignores ids
+    rt_config_desc c{};
+    CHECK(rt_session_config(s, &c) == RT_OK);
+    CHECK(std::string(c.output_id) == maxId);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("device info copy drops ids that do not fit", "[ffi]") {
+    rt::DeviceInfo d;
+    d.id   = std::string(RT_ID_BYTES - 1, 'a');
+    d.name = std::string(RT_NAME_BYTES - 2, 'n') + "\xC2\xAE";   // the (R) sign straddles the limit
+    d.maxInputChannels = 2;
+    d.isDefaultInput   = true;
+
+    rt_device_info out{};
+    REQUIRE(rt::toDeviceInfo(d, out));
+    CHECK(std::strlen(out.id) == static_cast<std::size_t>(RT_ID_BYTES - 1));
+    CHECK(std::strlen(out.name) == static_cast<std::size_t>(RT_NAME_BYTES - 2));
+    CHECK(out.max_input_channels == 2);
+    CHECK(out.is_default_input == 1);
+    CHECK(out.is_default_output == 0);
+
+    d.id.push_back('a');
+    CHECK(!rt::toDeviceInfo(d, out));
 }
