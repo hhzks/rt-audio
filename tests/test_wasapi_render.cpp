@@ -40,3 +40,9 @@ TEST_CASE("a failed padding query returns its HRESULT and no frames", "[io]") {
     CHECK(r.hr == kHrDeviceInvalidated);
     CHECK(r.frames == 0u);
 }
+
+TEST_CASE("ring target is two of the larger buffers, not a rounded capacity", "[io]") {
+    CHECK(wasapiRingTargetFrames(1056, 1056) == 2112u);
+    CHECK(wasapiRingTargetFrames(144, 144) == 288u);
+    CHECK(wasapiRingTargetFrames(480, 1056) == 2112u);
+}

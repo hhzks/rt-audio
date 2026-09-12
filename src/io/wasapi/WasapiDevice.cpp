@@ -348,7 +348,7 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     captureRing_.reset(maxBlock * idx(engineCh) * 4);
 
     resampler_.prepare(engineCh, nominalRatio_);
-    ringTargetFrames_ = captureRing_.capacity() / 2 / idx(engineCh);
+    ringTargetFrames_ = wasapiRingTargetFrames(capture_.bufferFrames, render_.bufferFrames);
 
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);

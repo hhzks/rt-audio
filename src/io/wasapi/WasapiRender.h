@@ -18,4 +18,9 @@ RenderFrames wasapiRenderFrames(bool exclusive, std::uint32_t bufferFrames,
     return { hr, bufferFrames - padding };
 }
 
+constexpr std::uint32_t wasapiRingTargetFrames(std::uint32_t captureBufferFrames,
+                                               std::uint32_t renderBufferFrames) noexcept {
+    return 2 * (captureBufferFrames > renderBufferFrames ? captureBufferFrames : renderBufferFrames);
+}
+
 } // namespace rt
