@@ -9,6 +9,7 @@ use tachyonfx::{EffectManager, Motion, fx};
 
 use crate::app::{App, Row};
 use crate::meters::{FLOOR_DB, Meter};
+use crate::picker::khz;
 use crate::stats::Status;
 use crate::taper;
 use crate::theme::{Role, Theme, zone};
@@ -117,15 +118,6 @@ fn boxed(theme: &Theme, title: &str, area: Rect, buf: &mut Buffer) -> Rect {
 
 fn sep(theme: &Theme) -> &'static str {
     if theme.rich { " · " } else { " | " }
-}
-
-fn khz(sample_rate: f64) -> String {
-    let k = sample_rate / 1000.0;
-    if k.fract() == 0.0 {
-        format!("{k:.0} kHz")
-    } else {
-        format!("{k:.1} kHz")
-    }
 }
 
 fn fmt_ns(theme: &Theme, ns: u64) -> String {
