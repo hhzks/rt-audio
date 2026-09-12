@@ -5,6 +5,7 @@
 
 #include "engine/AudioEngine.h"
 #include "engine/LoopbackProbe.h"
+#include "ffi/SessionCallback.h"
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/RigChain.h"
@@ -120,6 +121,31 @@ TEST_CASE("monitor does not allocate", "[engine]") {
     g_allocations = 0;
     g_trapArmed = true;
     for (int i = 0; i < 100; ++i) engine.monitor(in.data(), out.data(), 128);
+    g_trapArmed = false;
+    CHECK(g_allocations.load() == 0);
+}
+
+TEST_CASE("session callback modes do not allocate", "[engine]") {
+    AudioEngine engine;
+    buildRigChain(engine.chain());
+    engine.prepare(48000.0, 128, 2);
+
+    SweepConfig cfg;
+    cfg.seconds = 0.05; cfg.primeSeconds = 0.01;
+    cfg.maxLatencySeconds = 0.02; cfg.tailSeconds = 0.01;
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 2, cfg);
+    probe.arm();
+
+    SessionCallback callback(engine, probe);
+    std::vector<float> in(128 * 2, 0.1f), out(128 * 2);
+    g_allocations = 0;
+    g_trapArmed = true;
+    for (CallbackMode m : {CallbackMode::Normal, CallbackMode::Silent,
+                           CallbackMode::ProbeDirect, CallbackMode::ProbeChain}) {
+        callback.setMode(m);
+        for (int i = 0; i < 25; ++i) callback.audioDeviceProcess(in.data(), out.data(), 128);
+    }
     g_trapArmed = false;
     CHECK(g_allocations.load() == 0);
 }

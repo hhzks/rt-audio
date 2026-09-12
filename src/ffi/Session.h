@@ -4,9 +4,11 @@
 #include "dsp/RigChain.h"
 #include "engine/AudioEngine.h"
 #include "io/DeviceFactory.h"
-#include "io/EngineCallback.h"
+#include "engine/LoopbackProbe.h"
+#include "ffi/SessionCallback.h"
 #include "io/IAudioDevice.h"
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -47,6 +49,10 @@ public:
     void stop() noexcept;
     bool isOpen() const noexcept { return opened_; }
 
+    void latencyEnter();
+    void latencyLeave();
+    bool latencyMode() const noexcept { return latencyMode_.load(std::memory_order_relaxed); }
+
     const DeviceConfig& config() const;
     Backend             backend() const;
     const std::string&  reconfigureMessage() const noexcept { return message_; }
@@ -75,7 +81,8 @@ private:
 
     AudioEngine                   engine_;      // declared first, destroyed last
     RigChain                      rig_{};
-    EngineCallback                callback_{engine_};
+    LoopbackProbe                 probe_;
+    SessionCallback               callback_{engine_, probe_};
     ParamBlock<3>                 master_;
     DeviceMaker                   make_;
     Backend                       backend_ = Backend::Null;
@@ -83,6 +90,7 @@ private:
     std::string                   stopReason_;
     std::string                   message_;
     bool                          opened_ = false;
+    std::atomic<bool>             latencyMode_{false};
     std::unique_ptr<IAudioDevice> device_;      // declared last, destroyed first: joins the device thread
 };
 

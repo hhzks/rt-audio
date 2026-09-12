@@ -124,6 +124,18 @@ Backend Session::backend() const {
     return backend_;
 }
 
+void Session::latencyEnter() {
+    checkOpened();
+    latencyMode_.store(true, std::memory_order_relaxed);
+    callback_.setMode(CallbackMode::Silent);
+}
+
+void Session::latencyLeave() {
+    checkOpened();
+    latencyMode_.store(false, std::memory_order_relaxed);
+    callback_.setMode(CallbackMode::Normal);
+}
+
 std::size_t Session::stripCount() const noexcept { return 1 + engine_.chain().size(); }
 
 const IEffect& Session::effect(std::size_t strip) const {
