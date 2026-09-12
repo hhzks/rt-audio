@@ -1,6 +1,6 @@
 # rt-audio
 
-Low-latency realtime audio passthrough with an effects chain in C++26. Windows primary,
+Low-latency realtime audio passthrough with an effects chain in C++26 with a Rust TUI frontend. Windows primary,
 with an ALSA/JACK port in progress.
 
 ## Requirements
