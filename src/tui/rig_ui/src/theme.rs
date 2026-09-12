@@ -86,6 +86,8 @@ pub struct Glyphs {
     pub key_leftright: &'static str,
     pub times: &'static str,
     pub minus: &'static str,
+    pub step_prev: &'static str,
+    pub step_next: &'static str,
     pub effects: bool,
 }
 
@@ -112,6 +114,8 @@ impl Glyphs {
             key_leftright: "←→",
             times: "×",
             minus: "−",
+            step_prev: "◂",
+            step_next: "▸",
             effects: true,
         }
     }
@@ -138,6 +142,8 @@ impl Glyphs {
             key_leftright: "l/r",
             times: "x",
             minus: "-",
+            step_prev: "<",
+            step_next: ">",
             effects: false,
         }
     }
@@ -332,6 +338,8 @@ mod tests {
             g.key_leftright,
             g.times,
             g.minus,
+            g.step_prev,
+            g.step_next,
         ];
         for s in all.iter().chain(g.vbar.iter()).chain(g.hbar.iter()) {
             assert!(basic_safe(s), "{s:?}");

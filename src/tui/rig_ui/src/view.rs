@@ -7,9 +7,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
-use crate::app::{App, Row};
+use crate::app::{App, Mode, Row};
 use crate::meters::{FLOOR_DB, Meter};
-use crate::picker::khz;
+use crate::picker::{Field, PickerStatus, khz};
 use crate::stats::Status;
 use crate::taper;
 use crate::theme::{Role, Theme, zone};
@@ -21,7 +21,7 @@ const METER_W: u16 = 10;
 const HIST_W: u16 = 40;
 const SLIDER_W: usize = 16;
 
-const HELP: [(&str, &str); 12] = [
+const HELP: [(&str, &str); 13] = [
     ("space", "bypass the whole chain"),
     ("d / g", "drive / gate on or off"),
     ("enter", "selected strip on or off"),
@@ -32,6 +32,7 @@ const HELP: [(&str, &str); 12] = [
     ("0", "reset to default"),
     ("t", "swap chain and histogram"),
     ("r", "reset stats"),
+    ("o", "devices and stream settings"),
     ("q q", "quit"),
     ("ctrl+c", "quit now"),
 ];
@@ -81,7 +82,12 @@ pub fn draw(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         cols[1],
         buf,
     );
-    if wide {
+    if app.picker.is_some() {
+        draw_picker(app, theme, cols[2], buf);
+        if wide {
+            draw_histogram(app, theme, cols[3], buf);
+        }
+    } else if wide {
         draw_chain(app, theme, cols[2], buf);
         draw_histogram(app, theme, cols[3], buf);
     } else if app.show_histogram {
@@ -120,6 +126,34 @@ fn sep(theme: &Theme) -> &'static str {
     if theme.rich { " · " } else { " | " }
 }
 
+fn ell(theme: &Theme) -> &'static str {
+    if theme.rich { "…" } else { "..." }
+}
+
+fn fit(s: &str, width: usize, ell: &str) -> String {
+    if s.chars().count() <= width {
+        return s.to_owned();
+    }
+    let keep = width.saturating_sub(ell.chars().count());
+    s.chars().take(keep).chain(ell.chars()).collect()
+}
+
+fn wrap(s: &str, width: usize, lines: usize, ell: &str) -> Vec<String> {
+    if width == 0 || lines == 0 {
+        return Vec::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out: Vec<String> = chars.chunks(width).map(|c| c.iter().collect()).collect();
+    if out.len() > lines {
+        out.truncate(lines);
+        if let Some(last) = out.last_mut() {
+            let longer = format!("{last}{ell}");
+            *last = fit(&longer, width, ell);
+        }
+    }
+    out
+}
+
 fn fmt_ns(theme: &Theme, ns: u64) -> String {
     let ns = ns as f64;
     if ns >= 1e6 {
@@ -134,16 +168,18 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let d = &app.device;
     let bar = if theme.rich { "│" } else { "|" };
     let sep = sep(theme);
-    let left = format!(
+    let ell = ell(theme);
+    let mut left = format!(
         " rt-rig {bar} {}{sep}{}{sep}{} fr{sep}{:.2} ms",
         d.backend,
         khz(d.sample_rate),
         d.block_frames,
         d.block_ms()
     );
-    put(buf, area.x, area.y, &left, theme.style(Role::Title));
 
-    let (icon, text, role) = match app.status() {
+    let mut why = String::new();
+    let mut note = String::new();
+    let (icon, head, role) = match app.status() {
         Status::Live => (g.live, "LIVE".to_owned(), Role::Good),
         Status::Stalled(q) => (
             g.stalled,
@@ -151,12 +187,15 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
             Role::Warn,
         ),
         Status::Stopped => {
-            let why = if app.snapshot.device_error.is_empty() {
-                "device stopped"
+            why = if app.snapshot.device_error.is_empty() {
+                "device stopped".to_owned()
             } else {
-                app.snapshot.device_error.as_str()
+                app.snapshot.device_error.clone()
             };
-            (g.stopped, format!("STOPPED{sep}{why}"), Role::Bad)
+            if app.mode() == Mode::Rig {
+                note = format!("{sep}retrying{sep}o devices");
+            }
+            (g.stopped, format!("STOPPED{sep}"), Role::Bad)
         }
     };
     let flash = app.stats.xrun_flash(app.now);
@@ -170,9 +209,28 @@ fn draw_header(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     } else {
         String::new()
     };
-    let status = format!("{icon} {text}");
-    let tail = format!(" {bar} xruns {}{marker} ", app.stats.dropouts());
-    let width = badge.chars().count() + status.chars().count() + tail.chars().count();
+    let mut tail = format!(" {bar} xruns {}{marker} ", app.stats.dropouts());
+
+    let w = |s: &str| s.chars().count();
+    let avail = usize::from(area.width);
+    let fixed = w(&badge) + w(icon) + 1 + w(&head) + w(&note);
+    let used = |l: &str, r: &str, t: &str| w(l) + 1 + fixed + w(r) + w(t);
+    if used(&left, &why, &tail) > avail {
+        tail = " ".to_owned();
+    }
+    if used(&left, &why, &tail) > avail {
+        let over = used(&left, &why, &tail) - avail;
+        let floor = w(&format!(" rt-rig {bar}"));
+        left = fit(&left, w(&left).saturating_sub(over).max(floor + 1), ell);
+    }
+    if used(&left, &why, &tail) > avail && !why.is_empty() {
+        let over = used(&left, &why, &tail) - avail;
+        why = fit(&why, w(&why).saturating_sub(over), ell);
+    }
+    put(buf, area.x, area.y, &left, theme.style(Role::Title));
+
+    let status = format!("{icon} {head}{why}{note}");
+    let width = w(&badge) + w(&status) + w(&tail);
     let right = area.x + area.width;
     let mut x = right
         .saturating_sub(u16::try_from(width).unwrap_or(area.width))
@@ -562,16 +620,132 @@ fn draw_histogram(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     put(buf, inner.x, label_y + 2, &line2, normal);
 }
 
+fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
+    let Some(p) = app.picker.as_ref() else {
+        return;
+    };
+    let inner = boxed(theme, "DEVICE", area, buf);
+    if inner.height < 12 || inner.width < 40 {
+        return;
+    }
+    let g = &theme.glyphs;
+    let sep = sep(theme);
+    let ell = ell(theme);
+    let width = usize::from(inner.width);
+    let normal = theme.style(Role::Normal);
+    let dim = theme.style(Role::Dim);
+    let x0 = inner.x;
+    let mut y = inner.y + 1;
+
+    let backend = format!("  {:<8}{}", "backend", p.edited.backend.to_uppercase());
+    put(buf, x0, y, &backend, normal);
+    y += 1;
+
+    let selected = p.selected();
+    for field in p.visible_fields() {
+        let is_sel = field == selected;
+        let read_only = p.read_only(field);
+        let cursor = if is_sel { g.cursor } else { " " };
+        let mut x = put(buf, x0, y, cursor, theme.style(Role::Accent));
+        x = put(buf, x, y, &format!(" {:<8}", field.name()), normal);
+        let value = p.label(field, app.device.sample_rate, sep);
+        let text = if read_only {
+            format!("  {value}")
+        } else if matches!(field, Field::Input | Field::Output) {
+            let w = width.saturating_sub(14);
+            format!(
+                "{} {:<w$} {}",
+                g.step_prev,
+                fit(&value, w, ell),
+                g.step_next
+            )
+        } else {
+            format!("{} {value} {}", g.step_prev, g.step_next)
+        };
+        let style = if is_sel {
+            normal.patch(theme.style(Role::Selected))
+        } else if read_only {
+            dim
+        } else {
+            normal
+        };
+        x = put(buf, x, y, &text, style);
+        let note = p.note(field);
+        if !note.is_empty() {
+            put(buf, x + 3, y, note, dim);
+        }
+        y += 1;
+    }
+
+    y += 1;
+    let d = &app.device;
+    let now = format!(
+        "  now  {}{sep}{}{sep}{} fr",
+        d.backend,
+        khz(d.sample_rate),
+        d.block_frames
+    );
+    put(buf, x0, y, &fit(&now, width, ell), normal);
+    put(
+        buf,
+        x0,
+        y + 1,
+        &fit(&format!("       in  {}", d.input), width, ell),
+        dim,
+    );
+    put(
+        buf,
+        x0,
+        y + 2,
+        &fit(&format!("       out {}", d.output), width, ell),
+        dim,
+    );
+    y += 4;
+
+    let (status, role) = if app.switching {
+        (format!("switching{ell}"), Role::Warn)
+    } else if let Some(e) = &p.list_error {
+        (format!("device list unavailable: {e}"), Role::Bad)
+    } else {
+        match &p.status {
+            PickerStatus::Applied => ("applied".to_owned(), Role::Good),
+            PickerStatus::RolledBack(m) => (format!("rolled back: {m}"), Role::Warn),
+            PickerStatus::Idle | PickerStatus::Pending => (String::new(), Role::Normal),
+        }
+    };
+    let bottom = inner.y + inner.height;
+    let lines = usize::from(bottom.saturating_sub(y)).min(3);
+    for (i, line) in wrap(&status, width.saturating_sub(2), lines, ell)
+        .iter()
+        .enumerate()
+    {
+        put(buf, x0 + 2, y + i as u16, line, theme.style(role));
+    }
+}
+
 fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if let Some(m) = app.message() {
         put(buf, area.x + 1, area.y, m, theme.style(Role::Warn));
         return;
     }
     let g = &theme.glyphs;
-    let text = format!(
-        " {} bypass  d drive  g gate  {} select  {} adjust  [ ] fine  ? help  qq quit",
-        g.key_space, g.key_updown, g.key_leftright
-    );
+    let text = if app.mode() == Mode::Picker {
+        format!(
+            " {} field  {} change  R rescan  Esc close  qq quit",
+            g.key_updown, g.key_leftright
+        )
+    } else {
+        let rig = format!(
+            " {} bypass  d drive  g gate  {} select  {} adjust  [ ] fine  ? help  qq quit",
+            g.key_space, g.key_updown, g.key_leftright
+        );
+        let more = "  o devices";
+        if rig.chars().count() + more.len() <= usize::from(area.width) {
+            rig + more
+        } else {
+            rig
+        }
+    };
     put(buf, area.x, area.y, &text, theme.style(Role::Dim));
 }
 
@@ -811,5 +985,123 @@ mod tests {
         fx.apply(&app, &t, Duration::from_millis(100), area, &mut buf);
         app.bypass_changed = Some(app.now);
         fx.apply(&app, &t, Duration::from_millis(1000), area, &mut buf);
+    }
+
+    fn picker_app(e: &mut FakeEngine, backend: &str) -> App {
+        e.config.backend = backend.into();
+        let mut app = app_with(e);
+        let now = app.now;
+        app.update(Msg::OpenPicker, e, now).unwrap();
+        app
+    }
+
+    #[test]
+    fn picker_replaces_the_chain_at_80x24() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "wasapi");
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(has(&r, "DEVICE") && !has(&r, "CHAIN"));
+        assert!(has(&r, "backend WASAPI"));
+        assert!(has(&r, "▸ input   ◂ System default (Mic)"));
+        assert!(has(&r, "mode    ◂ shared ▸"));
+        assert!(has(&r, "◂ 128 fr · 2.67 ms ▸   the driver can round it"));
+        assert!(has(&r, "48 kHz   set by the device mix format"));
+        assert!(has(&r, "now  Null · 48 kHz · 128 fr"));
+        assert!(r[23].contains("R rescan"), "{}", r[23]);
+    }
+
+    #[test]
+    fn picker_basic_glyphs_stay_in_the_console_font() {
+        const SAFE: &str = "─│┌┐└┘├┤┬┴┼█▄▀▌▐░▒▓";
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "wasapi");
+        let r = rows(&app, &Theme::new(false, ColorMode::None), 80, 24);
+        for row in &r {
+            for c in row.chars() {
+                assert!(c.is_ascii() || SAFE.contains(c), "{c:?} in {row:?}");
+            }
+        }
+        assert!(has(&r, "> input   < System default (Mic)"));
+        assert!(has(&r, "< 128 fr | 2.67 ms >"));
+    }
+
+    #[test]
+    fn picker_status_lines() {
+        let mut e = FakeEngine::rig();
+        let mut app = picker_app(&mut e, "null");
+        let t = Theme::new(true, ColorMode::None);
+        app.switching = true;
+        assert!(has(&rows(&app, &t, 80, 24), "switching…"));
+        app.switching = false;
+        app.picker.as_mut().unwrap().status = PickerStatus::RolledBack(
+            "could not open the new config: cannot open usb; restored the previous config".into(),
+        );
+        let r = rows(&app, &t, 80, 24);
+        assert!(has(&r, "rolled back: could not open the new config"));
+        assert!(
+            has(&r, "restored the previous config"),
+            "wrapped onto a second line"
+        );
+        app.picker.as_mut().unwrap().list_error = Some("COM error".into());
+        assert!(has(
+            &rows(&app, &t, 80, 24),
+            "device list unavailable: COM error"
+        ));
+    }
+
+    #[test]
+    fn picker_at_120_columns_keeps_the_histogram() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "null");
+        let r = rows(&app, &Theme::new(true, ColorMode::None), 120, 30);
+        assert!(has(&r, "DEVICE") && has(&r, "CALLBACK TIME") && !has(&r, "CHAIN"));
+    }
+
+    #[test]
+    fn stopped_header_keeps_the_retry_hint_at_80_columns() {
+        let mut e = FakeEngine::rig();
+        e.device.backend = "WASAPI (exclusive) in f32 out f32 asrc 44100->48000".into();
+        e.next.running = false;
+        e.next.device_error = "WASAPI device lost (hr=0x88890004)".into();
+        let app = app_with(&mut e);
+        let r = rows(&app, &Theme::new(true, ColorMode::None), 80, 24);
+        assert!(r[0].starts_with(" rt-rig │"), "{}", r[0]);
+        assert!(r[0].contains("■ STOPPED · WASAPI device lost"), "{}", r[0]);
+        assert!(r[0].contains("retrying · o devices"), "{}", r[0]);
+    }
+
+    #[test]
+    fn stopped_header_in_the_picker_has_no_retry_hint() {
+        let mut e = FakeEngine::rig();
+        e.next.running = false;
+        let mut app = picker_app(&mut e, "null");
+        let snap = e.snapshot().unwrap();
+        let now = app.now;
+        app.ingest(snap, &e, now);
+        let r = rows(&app, &Theme::new(true, ColorMode::None), 80, 24);
+        assert!(
+            r[0].contains("STOPPED") && !r[0].contains("retrying"),
+            "{}",
+            r[0]
+        );
+    }
+
+    #[test]
+    fn fit_and_wrap() {
+        assert_eq!(fit("abcdef", 10, "…"), "abcdef");
+        assert_eq!(fit("abcdef", 4, "…"), "abc…");
+        assert_eq!(fit("abcdef", 4, "..."), "a...");
+        assert_eq!(wrap("abcdefgh", 3, 2, "…"), ["abc", "de…"]);
+        assert_eq!(wrap("abcd", 3, 2, "…"), ["abc", "d"]);
+        assert!(wrap("", 3, 2, "…").is_empty());
+    }
+
+    #[test]
+    fn the_rig_hint_shows_o_when_there_is_room() {
+        let mut e = FakeEngine::rig();
+        let app = app_with(&mut e);
+        let t = Theme::new(true, ColorMode::None);
+        assert!(!rows(&app, &t, 80, 24)[23].contains("o devices"));
+        assert!(rows(&app, &t, 120, 30)[29].contains("o devices"));
     }
 }
