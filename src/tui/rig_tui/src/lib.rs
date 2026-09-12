@@ -177,7 +177,7 @@ fn ui_loop(
         let due = last + frame;
         while event::poll(due.saturating_duration_since(Instant::now())).map_err(Fatal::Terminal)? {
             let ev = event::read().map_err(Fatal::Terminal)?;
-            if let Some(msg) = map_key(&ev) {
+            if let Some(msg) = map_key(&ev, app.mode()) {
                 app.update(msg, engine, Instant::now())
                     .map_err(Fatal::Engine)?;
             }
