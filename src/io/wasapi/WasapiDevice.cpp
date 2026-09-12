@@ -388,6 +388,7 @@ void WasapiDevice::start() {
     lastHr_.store(0, std::memory_order_relaxed);
 
     const std::size_t ch = idx(config_.numChannels);
+    captureStarted_ = false;
     primeRing(captureRing_, ringTargetFrames_, ch);
     resampler_.reset();
     drift_.prepare(ringTargetFrames_ * ch, 0.002);
@@ -472,6 +473,7 @@ bool WasapiDevice::drainCapture() noexcept {
 
         if (pushEvictingOldest(captureRing_, resampleScratch_.data(), idx(produced) * ch, ch))
             captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+        captureStarted_ = true;
         captureService_->ReleaseBuffer(frames);
     }
 }
@@ -497,7 +499,7 @@ bool WasapiDevice::fillRender() noexcept {
     const int         ch   = config_.numChannels;
     const std::size_t need = static_cast<std::size_t>(framesToWrite) * idx(ch);
 
-    if (captureRing_.popOrZero(engineIn_.data(), need))
+    if (popForRender(captureRing_, engineIn_.data(), need, captureStarted_))
         captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
 
     callback_->audioDeviceProcess(engineIn_.data(), engineOut_.data(),

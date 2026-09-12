@@ -141,3 +141,29 @@ TEST_CASE("a primed ring starts the drift loop at zero error", "[core]") {
     CAPTURE(worst);
     CHECK(worst < 1e-12);
 }
+
+TEST_CASE("render leaves a primed ring alone until the first capture block", "[core]") {
+    constexpr std::size_t kFrames = 144, kTargetFrames = 512;
+    SpscRingBuffer ring;
+    ring.reset(kFrames * kCh * 4);
+    DriftController drift;
+
+    primeRing(ring, kTargetFrames, kCh);
+    drift.prepare(kTargetFrames * kCh, 0.002);
+
+    const auto block = makeBlock(kFrames);
+    std::vector<float> out(block.size(), 1.0f);
+    for (int i = 0; i < 3; ++i) popForRender(ring, out.data(), out.size(), false);
+
+    CHECK(ring.readAvailable() == kTargetFrames * kCh);
+    CHECK(std::all_of(out.begin(), out.end(), [](float v) { return v == 0.0f; }));
+
+    double worst = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        worst = std::max(worst, std::fabs(drift.update(ring.readAvailable()) - 1.0));
+        pushEvictingOldest(ring, block.data(), block.size(), kCh);
+        popForRender(ring, out.data(), out.size(), true);
+    }
+    CAPTURE(worst);
+    CHECK(worst < 1e-12);
+}

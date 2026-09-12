@@ -79,6 +79,7 @@ private:
 
     SpscRingBuffer     captureRing_;   // capture thread -> render, in RENDER-rate engine layout
     std::size_t        ringTargetFrames_ = 0;
+    bool               captureStarted_ = false;
     std::vector<float> engineIn_, engineOut_, convertScratch_, deviceScratch_, resampleScratch_;
 
     AsyncResampler  resampler_;
