@@ -24,6 +24,10 @@ public:
     // Aliasing in == out is allowed.
     void processInterleaved(const float* in, float* out, FrameCount numFrames) noexcept;
 
+    // Realtime. Records the callback and the meters from `in` and `out` without
+    // running the chain or writing `out`.
+    void monitor(const float* in, const float* out, FrameCount numFrames) noexcept;
+
     ParameterStore& params()       noexcept { return params_; }
     RtStats&        stats()        noexcept { return stats_; }
     EffectChain&    chain()        noexcept { return chain_; }

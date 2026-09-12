@@ -113,6 +113,17 @@ TEST_CASE("loopback probe does not allocate", "[engine]") {
     CHECK(g_allocations.load() == 0);
 }
 
+TEST_CASE("monitor does not allocate", "[engine]") {
+    AudioEngine engine;
+    engine.prepare(48000.0, 128, 2);
+    std::vector<float> in(128 * 2, 0.1f), out(128 * 2, 0.2f);
+    g_allocations = 0;
+    g_trapArmed = true;
+    for (int i = 0; i < 100; ++i) engine.monitor(in.data(), out.data(), 128);
+    g_trapArmed = false;
+    CHECK(g_allocations.load() == 0);
+}
+
 TEST_CASE("parameter changes do not allocate", "[engine]") {
     AudioEngine engine;
     const RigChain rig = buildRigChain(engine.chain());

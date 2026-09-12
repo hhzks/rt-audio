@@ -118,4 +118,33 @@ void AudioEngine::processInterleaved(const float* in, float* out, FrameCount num
     stats_.recordCallback(static_cast<std::uint64_t>(elapsed));
 }
 
+void AudioEngine::monitor(const float* in, const float* out, FrameCount numFrames) noexcept {
+    if (!prepared_ || numFrames > maxBlockFrames_) {
+        stats_.recordXrun();
+        return;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const int ch = numChannels_;
+    std::uint64_t inClips = 0, outClips = 0;
+    for (int c = 0; c < ch; ++c) {
+        float inPeak = 0.0f, outPeak = 0.0f;
+        for (FrameCount i = 0; i < numFrames; ++i) {
+            const float a = std::fabs(in[idx(i * ch + c)]);
+            const float b = std::fabs(out[idx(i * ch + c)]);
+            inPeak  = std::max(inPeak, a);
+            outPeak = std::max(outPeak, b);
+            if (a >= 1.0f) ++inClips;
+            if (b > 1.0f)  ++outClips;
+        }
+        raisePeak(stats_.inputPeak[idx(c)], inPeak);
+        raisePeak(stats_.outputPeak[idx(c)], outPeak);
+    }
+    if (inClips != 0)  stats_.inputClips.fetch_add(inClips, std::memory_order_relaxed);
+    if (outClips != 0) stats_.outputClips.fetch_add(outClips, std::memory_order_relaxed);
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now() - t0).count();
+    stats_.recordCallback(static_cast<std::uint64_t>(elapsed));
+}
+
 } // namespace rt
