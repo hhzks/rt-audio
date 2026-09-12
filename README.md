@@ -3,6 +3,8 @@
 Low-latency realtime audio passthrough with an effects chain in C++26 with a Rust TUI frontend. Windows primary,
 with an ALSA/JACK port in progress.
 
+<img width="800" height="450" alt="rt-audio" src="https://github.com/user-attachments/assets/4cd0c155-bca4-4342-8fca-0cc456c0135c" />
+
 ## Requirements
 
 - CMake >= 3.25
