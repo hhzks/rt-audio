@@ -3,12 +3,21 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::meters::{ClipLatch, Meter};
-use crate::model::{Device, Engine, EngineError, HIST_BUCKETS, Snapshot, Strip};
+use crate::model::{Config, Device, Engine, EngineError, HIST_BUCKETS, Outcome, Snapshot, Strip};
+use crate::picker::{Picker, PickerStatus};
 use crate::stats::{Stats, Status};
 use crate::taper;
 
 pub const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 pub const MESSAGE_TIME: Duration = Duration::from_secs(2);
+pub const SETTLE: Duration = Duration::from_millis(250);
+pub const RETRY_EVERY: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Rig,
+    Picker,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Msg {
@@ -26,17 +35,33 @@ pub enum Msg {
     SwapPanel,
     Help,
     CloseOverlay,
+    OpenPicker,
+    ClosePicker,
+    Rescan,
     Quit,
     QuitNow,
 }
 
-pub fn map_key(ev: &Event) -> Option<Msg> {
+pub fn map_key(ev: &Event, mode: Mode) -> Option<Msg> {
     let Event::Key(k) = ev else { return None };
     if !matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
         return None;
     }
     if k.modifiers.contains(KeyModifiers::CONTROL) {
         return matches!(k.code, KeyCode::Char('c')).then_some(Msg::QuitNow);
+    }
+    if mode == Mode::Picker {
+        return Some(match k.code {
+            KeyCode::Up | KeyCode::Char('k') => Msg::Up,
+            KeyCode::Down | KeyCode::Char('j') => Msg::Down,
+            KeyCode::Left | KeyCode::Char('h') => Msg::Coarse(-1),
+            KeyCode::Right | KeyCode::Char('l') => Msg::Coarse(1),
+            KeyCode::Char('R') => Msg::Rescan,
+            KeyCode::Esc | KeyCode::Char('o') => Msg::ClosePicker,
+            KeyCode::Char(' ') => Msg::ToggleBypass,
+            KeyCode::Char('q') => Msg::Quit,
+            _ => return None,
+        });
     }
     Some(match k.code {
         KeyCode::Up | KeyCode::Char('k') => Msg::Up,
@@ -53,6 +78,7 @@ pub fn map_key(ev: &Event) -> Option<Msg> {
         KeyCode::Char(c @ '1'..='9') => Msg::JumpStrip(c as usize - '1' as usize),
         KeyCode::Char('t') => Msg::SwapPanel,
         KeyCode::Char('r') => Msg::ResetStats,
+        KeyCode::Char('o') => Msg::OpenPicker,
         KeyCode::Char('?') => Msg::Help,
         KeyCode::Esc => Msg::CloseOverlay,
         KeyCode::Char('q') => Msg::Quit,
@@ -84,8 +110,14 @@ pub struct App {
     pub bypass_changed: Option<Instant>,
     pub now: Instant,
     pub bucket_upper_ns: Vec<u64>,
+    pub picker: Option<Picker>,
+    pub switching: bool,
+    pub launch_config: Config,
     message: Option<(String, Instant)>,
     quit_armed: Option<Instant>,
+    pending: Option<(Config, Instant)>,
+    last_retry: Option<Instant>,
+    retrying: bool,
 }
 
 impl App {
@@ -125,8 +157,22 @@ impl App {
             bucket_upper_ns: (0..HIST_BUCKETS)
                 .map(|b| engine.bucket_upper_ns(b))
                 .collect(),
+            picker: None,
+            switching: false,
+            launch_config: engine.config().clone(),
             message: None,
             quit_armed: None,
+            pending: None,
+            last_retry: None,
+            retrying: false,
+        }
+    }
+
+    pub fn mode(&self) -> Mode {
+        if self.picker.is_some() {
+            Mode::Picker
+        } else {
+            Mode::Rig
         }
     }
 
@@ -141,6 +187,9 @@ impl App {
             self.quit_armed = None;
         }
         match msg {
+            Msg::Up | Msg::Down | Msg::Coarse(_) if self.picker.is_some() => {
+                self.picker_key(msg, now);
+            }
             Msg::Up => self.selected = self.selected.saturating_sub(1),
             Msg::Down => {
                 if self.selected + 1 < self.rows.len() {
@@ -172,6 +221,14 @@ impl App {
             Msg::SwapPanel => self.show_histogram = !self.show_histogram,
             Msg::Help => self.help = !self.help,
             Msg::CloseOverlay => self.help = false,
+            Msg::OpenPicker => self.open_picker(engine),
+            Msg::ClosePicker => self.picker = None,
+            Msg::Rescan => {
+                let devices = engine.devices().map_err(|e| e.to_string());
+                if let Some(p) = self.picker.as_mut() {
+                    p.set_devices(devices);
+                }
+            }
             Msg::Quit => {
                 if self
                     .quit_armed
@@ -202,6 +259,79 @@ impl App {
             .ingest(&snap, now, &|h, p| engine.percentile_ns(h, p));
         self.values = snap.params.clone();
         self.snapshot = snap;
+    }
+
+    // A settled picker change first; otherwise a retry while Stopped in rig mode.
+    pub fn due(&mut self, engine: &dyn Engine, now: Instant) -> Option<Config> {
+        self.now = now;
+        if let Some((config, at)) = &self.pending {
+            if now.saturating_duration_since(*at) < SETTLE {
+                return None;
+            }
+            let config = config.clone();
+            self.pending = None;
+            return Some(config);
+        }
+        let retry_due = self
+            .last_retry
+            .is_none_or(|t| now.saturating_duration_since(t) >= RETRY_EVERY);
+        if self.picker.is_none() && self.status() == Status::Stopped && retry_due {
+            self.last_retry = Some(now);
+            self.retrying = true;
+            return Some(engine.config().clone());
+        }
+        None
+    }
+
+    pub fn apply(
+        &mut self,
+        result: Result<Outcome, EngineError>,
+        engine: &dyn Engine,
+        now: Instant,
+    ) -> Result<(), EngineError> {
+        self.now = now;
+        self.switching = false;
+        let retry = std::mem::take(&mut self.retrying);
+        let outcome = match result {
+            Ok(o) => o,
+            Err(e @ (EngineError::Arg(_) | EngineError::State(_))) => {
+                if cfg!(debug_assertions) {
+                    panic!("reconfigure rejected: {e}");
+                }
+                self.flash(&format!("internal: {e}"));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        match &outcome {
+            Outcome::Applied => {
+                self.last_retry = None;
+                if retry {
+                    self.flash("device back");
+                }
+            }
+            Outcome::RolledBack(m) if self.picker.is_none() => {
+                self.flash(&format!("rolled back: {m}"));
+            }
+            _ => {}
+        }
+        let current = engine.config().clone();
+        if let Some(p) = self.picker.as_mut() {
+            p.edited = current;
+            p.status = match outcome {
+                Outcome::Applied => PickerStatus::Applied,
+                Outcome::RolledBack(m) => PickerStatus::RolledBack(m),
+                Outcome::Stopped(_) => PickerStatus::Idle,
+            };
+        }
+        self.rebuild(engine);
+        Ok(())
+    }
+
+    pub fn quit_line(&self, engine: &dyn Engine) -> Option<String> {
+        let now = engine.config();
+        (*now != self.launch_config)
+            .then(|| format!("rt-rig: to start with this config: {}", now.command_line()))
     }
 
     pub fn status(&self) -> Status {
@@ -238,6 +368,44 @@ impl App {
 
     fn flash(&mut self, msg: &str) {
         self.message = Some((msg.to_owned(), self.now));
+    }
+
+    fn open_picker(&mut self, engine: &mut dyn Engine) {
+        let config = self
+            .pending
+            .as_ref()
+            .map_or_else(|| engine.config().clone(), |(c, _)| c.clone());
+        let devices = engine.devices().map_err(|e| e.to_string());
+        self.help = false;
+        self.picker = Some(Picker::new(config, devices));
+    }
+
+    fn picker_key(&mut self, msg: Msg, now: Instant) {
+        let Some(p) = self.picker.as_mut() else {
+            return;
+        };
+        match msg {
+            Msg::Up => p.move_cursor(-1),
+            Msg::Down => p.move_cursor(1),
+            Msg::Coarse(dir) => {
+                if !p.step(dir) {
+                    return;
+                }
+                p.status = PickerStatus::Pending;
+                self.pending = Some((p.edited.clone(), now));
+            }
+            _ => {}
+        }
+    }
+
+    fn rebuild(&mut self, engine: &dyn Engine) {
+        self.device = engine.device().clone();
+        let channels = usize::try_from(self.device.channels).unwrap_or(0);
+        self.in_meters = vec![Meter::default(); channels];
+        self.out_meters = vec![Meter::default(); channels];
+        self.in_clip = ClipLatch::default();
+        self.out_clip = ClipLatch::default();
+        self.stats = Stats::new();
     }
 
     fn set(
@@ -307,6 +475,9 @@ mod tests {
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use std::time::{Duration, Instant};
 
+    use crate::picker::{Field, PickerStatus};
+    use crate::stats::Status;
+
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
@@ -318,6 +489,22 @@ mod tests {
         (e, app, t0)
     }
 
+    fn ingest(app: &mut App, e: &mut FakeEngine, now: Instant) {
+        let snap = e.snapshot().unwrap();
+        app.ingest(snap, &*e, now);
+    }
+
+    fn run_due(app: &mut App, e: &mut FakeEngine, now: Instant) -> bool {
+        match app.due(&*e, now) {
+            Some(cfg) => {
+                let r = e.reconfigure(&cfg);
+                app.apply(r, &*e, now).unwrap();
+                true
+            }
+            None => false,
+        }
+    }
+
     #[test]
     fn release_events_are_ignored_and_repeats_accepted() {
         let release = Event::Key(KeyEvent::new_with_kind(
@@ -325,14 +512,14 @@ mod tests {
             KeyModifiers::NONE,
             KeyEventKind::Release,
         ));
-        assert_eq!(map_key(&release), None);
+        assert_eq!(map_key(&release, Mode::Rig), None);
         let repeat = Event::Key(KeyEvent::new_with_kind(
             KeyCode::Right,
             KeyModifiers::NONE,
             KeyEventKind::Repeat,
         ));
-        assert_eq!(map_key(&repeat), Some(Msg::Coarse(1)));
-        assert_eq!(map_key(&Event::Resize(80, 24)), None);
+        assert_eq!(map_key(&repeat, Mode::Rig), Some(Msg::Coarse(1)));
+        assert_eq!(map_key(&Event::Resize(80, 24), Mode::Rig), None);
     }
 
     #[test]
@@ -359,18 +546,19 @@ mod tests {
             (Char('9'), Msg::JumpStrip(8)),
             (Char('t'), Msg::SwapPanel),
             (Char('r'), Msg::ResetStats),
+            (Char('o'), Msg::OpenPicker),
             (Char('?'), Msg::Help),
             (Esc, Msg::CloseOverlay),
             (Char('q'), Msg::Quit),
         ];
         for (code, msg) in cases {
-            assert_eq!(map_key(&key(code)), Some(msg), "{code:?}");
+            assert_eq!(map_key(&key(code), Mode::Rig), Some(msg), "{code:?}");
         }
-        assert_eq!(map_key(&key(Char('x'))), None);
+        assert_eq!(map_key(&key(Char('x')), Mode::Rig), None);
         let ctrl_c = Event::Key(KeyEvent::new(Char('c'), KeyModifiers::CONTROL));
-        assert_eq!(map_key(&ctrl_c), Some(Msg::QuitNow));
+        assert_eq!(map_key(&ctrl_c, Mode::Rig), Some(Msg::QuitNow));
         let ctrl_q = Event::Key(KeyEvent::new(Char('q'), KeyModifiers::CONTROL));
-        assert_eq!(map_key(&ctrl_q), None);
+        assert_eq!(map_key(&ctrl_q, Mode::Rig), None);
     }
 
     #[test]
@@ -511,5 +699,201 @@ mod tests {
         assert!(!app.help);
         app.update(Msg::SwapPanel, &mut e, t0).unwrap();
         assert!(app.show_histogram);
+    }
+
+    #[test]
+    fn picker_keymap() {
+        use KeyCode::*;
+        let cases = [
+            (Up, Msg::Up),
+            (Char('k'), Msg::Up),
+            (Down, Msg::Down),
+            (Char('j'), Msg::Down),
+            (Left, Msg::Coarse(-1)),
+            (Char('h'), Msg::Coarse(-1)),
+            (Right, Msg::Coarse(1)),
+            (Char('l'), Msg::Coarse(1)),
+            (Char('R'), Msg::Rescan),
+            (Esc, Msg::ClosePicker),
+            (Char('o'), Msg::ClosePicker),
+            (Char(' '), Msg::ToggleBypass),
+            (Char('q'), Msg::Quit),
+        ];
+        for (code, msg) in cases {
+            assert_eq!(map_key(&key(code), Mode::Picker), Some(msg), "{code:?}");
+        }
+        for code in [Char('r'), Char('d'), Char('1'), Enter, Char('['), Char('?')] {
+            assert_eq!(map_key(&key(code), Mode::Picker), None, "{code:?}");
+        }
+        let ctrl_c = Event::Key(KeyEvent::new(Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(map_key(&ctrl_c, Mode::Picker), Some(Msg::QuitNow));
+        assert_eq!(map_key(&key(Char('o')), Mode::Rig), Some(Msg::OpenPicker));
+        assert_eq!(map_key(&key(Char('r')), Mode::Rig), Some(Msg::ResetStats));
+    }
+
+    #[test]
+    fn the_picker_opens_with_the_engine_config_and_devices() {
+        let (mut e, mut app, t0) = setup();
+        app.help = true;
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        assert_eq!(app.mode(), Mode::Picker);
+        assert!(!app.help);
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.edited, e.config);
+        assert_eq!(p.devices.len(), 3);
+        app.update(Msg::ClosePicker, &mut e, t0).unwrap();
+        assert_eq!(app.mode(), Mode::Rig);
+
+        e.fail_devices = Some(EngineError::Device("boom".into()));
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        let err = app.picker.as_ref().unwrap().list_error.clone().unwrap();
+        assert!(err.contains("boom"), "{err}");
+        e.fail_devices = None;
+        app.update(Msg::Rescan, &mut e, t0).unwrap();
+        assert!(app.picker.as_ref().unwrap().list_error.is_none());
+    }
+
+    #[test]
+    fn picker_keys_do_not_touch_the_chain() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Down, &mut e, t0).unwrap();
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.picker.as_ref().unwrap().selected(), Field::Output);
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        assert!(e.sets.is_empty());
+    }
+
+    #[test]
+    fn changes_settle_into_one_reconfigure() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        app.update(Msg::OpenPicker, &mut e, at(0)).unwrap();
+        app.update(Msg::Coarse(1), &mut e, at(0)).unwrap();
+        app.update(Msg::Coarse(1), &mut e, at(100)).unwrap();
+        assert_eq!(app.picker.as_ref().unwrap().status, PickerStatus::Pending);
+        assert!(!run_due(&mut app, &mut e, at(300)));
+        assert!(run_due(&mut app, &mut e, at(350)));
+        assert_eq!(e.reconfigures.len(), 1);
+        assert_eq!(e.reconfigures[0].input, "usb");
+        assert_eq!(app.picker.as_ref().unwrap().status, PickerStatus::Applied);
+
+        app.update(Msg::Coarse(1), &mut e, at(2000)).unwrap(); // already at the end
+        assert!(!run_due(&mut app, &mut e, at(3000)));
+        assert_eq!(e.reconfigures.len(), 1);
+    }
+
+    #[test]
+    fn a_change_survives_closing_the_picker() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        app.update(Msg::ClosePicker, &mut e, t0).unwrap();
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        assert_eq!(e.config.input, "mic");
+    }
+
+    #[test]
+    fn a_rollback_reverts_the_fields_and_shows_the_reason() {
+        let (mut e, mut app, t0) = setup();
+        e.fail_ids.insert("mic".into());
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.edited.input, "");
+        assert!(matches!(&p.status, PickerStatus::RolledBack(m) if m.contains("restored")));
+    }
+
+    #[test]
+    fn a_failed_rollback_shows_stopped() {
+        let (mut e, mut app, t0) = setup();
+        e.fail_ids = ["mic".to_string(), String::new()].into();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        ingest(&mut app, &mut e, t0 + SETTLE);
+        assert_eq!(app.status(), Status::Stopped);
+        assert_eq!(app.picker.as_ref().unwrap().edited, e.config);
+    }
+
+    #[test]
+    fn rebuild_resets_the_watchdog_and_resizes_meters() {
+        let (mut e, mut app, t0) = setup();
+        e.next.callbacks = 100;
+        ingest(&mut app, &mut e, t0);
+        app.update(Msg::JumpStrip(3), &mut e, t0).unwrap();
+        let selected = app.selected;
+        e.device.channels = 1;
+        let later = t0 + Duration::from_secs(1);
+        app.update(Msg::OpenPicker, &mut e, later).unwrap();
+        app.update(Msg::Coarse(1), &mut e, later).unwrap();
+        assert!(run_due(&mut app, &mut e, later + SETTLE));
+        assert_eq!(
+            app.status(),
+            Status::Live,
+            "no false stall after a blocking reconfigure"
+        );
+        assert_eq!(app.in_meters.len(), 1);
+        assert_eq!(app.selected, selected);
+    }
+
+    #[test]
+    fn a_stopped_device_is_retried_every_two_seconds() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        e.fail_ids.insert(String::new());
+        e.next.running = false;
+        ingest(&mut app, &mut e, at(0));
+        assert!(
+            run_due(&mut app, &mut e, at(0)),
+            "the first retry is immediate"
+        );
+        assert_eq!(e.reconfigures.last(), Some(&e.config));
+        ingest(&mut app, &mut e, at(0));
+        assert_eq!(app.status(), Status::Stopped);
+        assert!(!run_due(&mut app, &mut e, at(1000)));
+        assert!(run_due(&mut app, &mut e, at(2000)));
+        ingest(&mut app, &mut e, at(2000));
+
+        app.update(Msg::OpenPicker, &mut e, at(2100)).unwrap();
+        assert!(
+            !run_due(&mut app, &mut e, at(4500)),
+            "no retry while the picker is open"
+        );
+        app.update(Msg::ClosePicker, &mut e, at(4500)).unwrap();
+
+        e.fail_ids.clear();
+        assert!(run_due(&mut app, &mut e, at(4600)));
+        assert_eq!(app.message(), Some("device back"));
+        ingest(&mut app, &mut e, at(4600));
+        assert_eq!(app.status(), Status::Live);
+        assert_eq!(e.reconfigures.len(), 3);
+    }
+
+    #[test]
+    fn a_pending_change_blocks_the_retry() {
+        let (mut e, mut app, t0) = setup();
+        e.next.running = false;
+        ingest(&mut app, &mut e, t0);
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        app.update(Msg::ClosePicker, &mut e, t0).unwrap();
+        assert!(app.due(&e, t0 + Duration::from_millis(100)).is_none());
+        let cfg = app.due(&e, t0 + SETTLE).unwrap();
+        assert_eq!(cfg.input, "mic", "the pending change, not a retry");
+    }
+
+    #[test]
+    fn the_quit_line_appears_only_after_a_change() {
+        let (mut e, mut app, t0) = setup();
+        assert_eq!(app.quit_line(&e), None);
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        assert_eq!(
+            app.quit_line(&e).as_deref(),
+            Some("rt-rig: to start with this config: rt_rig --backend null --in 'mic' --block 128")
+        );
     }
 }

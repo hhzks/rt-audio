@@ -2,14 +2,17 @@ use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use rig_ui::model::{
-    Device, Engine, EngineError, HIST_BUCKETS, Histogram, Param, Snapshot, Strip, Taper,
+    Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, Outcome, Param,
+    Snapshot, Strip, Taper,
 };
 
 use crate::ffi::{
-    self, RtDeviceDesc, RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc,
+    self, RtConfigDesc, RtDeviceDesc, RtDeviceInfo, RtOpenConfig, RtParamDesc, RtSession,
+    RtSnapshot, RtStripDesc,
 };
 
 const _: () = assert!(HIST_BUCKETS == ffi::RT_HIST_BUCKETS);
+const ENUMERATE_CAP: usize = 64;
 
 pub struct OpenOptions {
     pub backend: Option<String>,
@@ -24,6 +27,7 @@ pub struct FfiEngine {
     s: *mut RtSession,
     strips: Vec<Strip>,
     device: Device,
+    config: Config,
 }
 
 fn from_c_array(arr: &[c_char]) -> String {
@@ -44,15 +48,34 @@ fn from_c_ptr(p: *const c_char) -> String {
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
-fn c_string(s: &Option<String>) -> Result<Option<CString>, EngineError> {
-    s.as_deref()
-        .map(CString::new)
+fn c_string(s: Option<&str>) -> Result<Option<CString>, EngineError> {
+    s.map(CString::new)
         .transpose()
         .map_err(|_| EngineError::Arg("argument contains a NUL byte".into()))
 }
 
+fn non_empty(s: &str) -> Option<&str> {
+    (!s.is_empty()).then_some(s)
+}
+
+fn ptr_of(c: Option<&CString>) -> *const c_char {
+    c.map_or(ptr::null(), |c| c.as_ptr())
+}
+
 fn index(i: usize) -> Result<i32, EngineError> {
     i32::try_from(i).map_err(|_| EngineError::Arg("index out of range".into()))
+}
+
+fn entry(d: &RtDeviceInfo) -> DeviceEntry {
+    DeviceEntry {
+        id: from_c_array(&d.id),
+        name: from_c_array(&d.name),
+        inputs: d.max_input_channels,
+        outputs: d.max_output_channels,
+        default_rate: d.default_sample_rate,
+        default_in: d.is_default_input != 0,
+        default_out: d.is_default_output != 0,
+    }
 }
 
 impl FfiEngine {
@@ -66,16 +89,16 @@ impl FfiEngine {
             s,
             strips: Vec::new(),
             device: Device::default(),
+            config: Config::default(),
         };
 
-        let backend = c_string(&o.backend)?;
-        let input = c_string(&o.input)?;
-        let output = c_string(&o.output)?;
-        let ptr_of = |c: &Option<CString>| c.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+        let backend = c_string(o.backend.as_deref())?;
+        let input = c_string(o.input.as_deref())?;
+        let output = c_string(o.output.as_deref())?;
         let cfg = RtOpenConfig {
-            backend: ptr_of(&backend),
-            input_id: ptr_of(&input),
-            output_id: ptr_of(&output),
+            backend: ptr_of(backend.as_ref()),
+            input_id: ptr_of(input.as_ref()),
+            output_id: ptr_of(output.as_ref()),
             sample_rate: o.rate,
             block_frames: o.block,
             exclusive: u8::from(o.exclusive),
@@ -83,6 +106,7 @@ impl FfiEngine {
         // SAFETY: `e.s` is live; `cfg` and the CStrings it points to outlive the call.
         e.check(unsafe { ffi::rt_session_open(e.s, &cfg) })?;
         e.device = e.read_device()?;
+        e.config = e.read_config()?;
         e.strips = e.read_strips()?;
         Ok(e)
     }
@@ -94,17 +118,22 @@ impl FfiEngine {
         from_c_array(&buf)
     }
 
-    fn check(&self, code: i32) -> Result<(), EngineError> {
-        if code == ffi::RT_OK {
-            return Ok(());
-        }
+    fn error(&self, code: i32) -> EngineError {
         let msg = self.last_error();
-        Err(match code {
+        match code {
             ffi::RT_E_ARG => EngineError::Arg(msg),
             ffi::RT_E_STATE => EngineError::State(msg),
             ffi::RT_E_DEVICE => EngineError::Device(msg),
             _ => EngineError::Internal(msg),
-        })
+        }
+    }
+
+    fn check(&self, code: i32) -> Result<(), EngineError> {
+        if code == ffi::RT_OK {
+            Ok(())
+        } else {
+            Err(self.error(code))
+        }
     }
 
     fn read_device(&self) -> Result<Device, EngineError> {
@@ -113,10 +142,26 @@ impl FfiEngine {
         self.check(unsafe { ffi::rt_session_device(self.s, &mut d) })?;
         Ok(Device {
             backend: from_c_array(&d.backend),
+            input: from_c_array(&d.input),
+            output: from_c_array(&d.output),
             sample_rate: d.sample_rate,
             block_frames: d.block_frames,
             channels: d.channels,
             claimed_rtt_ms: d.claimed_rtt_ms,
+        })
+    }
+
+    fn read_config(&self) -> Result<Config, EngineError> {
+        let mut c = RtConfigDesc::zeroed();
+        // SAFETY: `c` is a valid, writable rt_config_desc.
+        self.check(unsafe { ffi::rt_session_config(self.s, &mut c) })?;
+        Ok(Config {
+            backend: from_c_array(&c.backend),
+            input: from_c_array(&c.input_id),
+            output: from_c_array(&c.output_id),
+            rate: c.sample_rate,
+            block: c.block_frames,
+            exclusive: c.exclusive != 0,
         })
     }
 
@@ -221,5 +266,58 @@ impl Engine for FfiEngine {
     fn bucket_upper_ns(&self, bucket: usize) -> u64 {
         // SAFETY: pure function over an integer.
         unsafe { ffi::rt_hist_bucket_upper_ns(i32::try_from(bucket).unwrap_or(i32::MAX)) }
+    }
+
+    fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
+        let mut cap = ENUMERATE_CAP;
+        loop {
+            let mut buf: Vec<RtDeviceInfo> = (0..cap).map(|_| RtDeviceInfo::zeroed()).collect();
+            let cap_c = i32::try_from(cap)
+                .map_err(|_| EngineError::Internal("device list too long".into()))?;
+            let mut total: i32 = 0;
+            // SAFETY: `buf` has `cap` writable entries and `total` is writable.
+            self.check(unsafe {
+                ffi::rt_session_enumerate(self.s, buf.as_mut_ptr(), cap_c, &mut total)
+            })?;
+            let n = usize::try_from(total).unwrap_or(0);
+            if n <= cap || cap > ENUMERATE_CAP {
+                buf.truncate(n.min(cap));
+                return Ok(buf.iter().map(entry).collect());
+            }
+            cap = n;
+        }
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
+    fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
+        let input = c_string(non_empty(&next.input))?;
+        let output = c_string(non_empty(&next.output))?;
+        let cfg = RtOpenConfig {
+            backend: ptr::null(),
+            input_id: ptr_of(input.as_ref()),
+            output_id: ptr_of(output.as_ref()),
+            sample_rate: next.rate,
+            block_frames: next.block,
+            exclusive: u8::from(next.exclusive),
+        };
+        let mut outcome: i32 = -1;
+        // SAFETY: `self.s` is live; `cfg`, the CStrings it points to and `outcome` outlive the call.
+        let code = unsafe { ffi::rt_session_reconfigure(self.s, &cfg, &mut outcome) };
+        let result = match (code, outcome) {
+            (ffi::RT_OK, _) => Outcome::Applied,
+            (ffi::RT_E_DEVICE, ffi::RT_RECONF_ROLLED_BACK) => {
+                Outcome::RolledBack(self.last_error())
+            }
+            (ffi::RT_E_DEVICE, ffi::RT_RECONF_STOPPED) => Outcome::Stopped(self.last_error()),
+            _ => return Err(self.error(code)),
+        };
+        self.config = self.read_config()?;
+        if !matches!(result, Outcome::Stopped(_)) {
+            self.device = self.read_device()?;
+        }
+        Ok(result)
     }
 }

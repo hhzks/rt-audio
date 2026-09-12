@@ -58,6 +58,13 @@ keys; `q q` quits.
   `TERM=linux` it uses a reduced glyph set; `--glyphs` and `--color` override the detection.
 - Over SSH, run it inside `tmux`, so a dropped connection does not stop the audio.
 - `--fps 15` reduces CPU use on small boards.
+- Press `o` to choose the input and output devices, the block size, the sample rate (ALSA and
+  Null) and WASAPI shared or exclusive mode. A change applies after a 250 ms pause. If the new
+  config fails to open, the previous one comes back. When you quit after a change, `rt_rig`
+  prints the command line that starts it with the same config. The device ids in it are in
+  single quotes, which PowerShell, POSIX shells and systemd accept; cmd.exe needs double quotes.
+- If the device stops, for example because a USB cable comes out, `rt_rig` tries to open it
+  again every 2 s until it comes back.
 
 ## License
 

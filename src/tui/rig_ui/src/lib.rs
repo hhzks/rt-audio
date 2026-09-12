@@ -3,6 +3,7 @@
 pub mod app;
 pub mod meters;
 pub mod model;
+pub mod picker;
 pub mod stats;
 pub mod taper;
 pub mod theme;

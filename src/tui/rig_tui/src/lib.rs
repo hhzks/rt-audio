@@ -151,7 +151,12 @@ fn run(args: &Args) -> i32 {
     drop(engine);
 
     match result {
-        Ok(()) => 0,
+        Ok(line) => {
+            if let Some(line) = line {
+                println!("{line}");
+            }
+            0
+        }
         Err(Fatal::Terminal(e)) => {
             eprintln!("rt-rig: terminal lost: {e}");
             4
@@ -168,22 +173,33 @@ fn ui_loop(
     engine: &mut FfiEngine,
     theme: &Theme,
     fps: u32,
-) -> Result<(), Fatal> {
+) -> Result<Option<String>, Fatal> {
     let frame = Duration::from_secs(1) / fps;
     let mut app = App::new(&*engine, Instant::now());
     let mut fx = Fx::default();
     let mut last = Instant::now();
     loop {
-        let due = last + frame;
-        while event::poll(due.saturating_duration_since(Instant::now())).map_err(Fatal::Terminal)? {
+        let next_frame = last + frame;
+        while event::poll(next_frame.saturating_duration_since(Instant::now()))
+            .map_err(Fatal::Terminal)?
+        {
             let ev = event::read().map_err(Fatal::Terminal)?;
-            if let Some(msg) = map_key(&ev) {
+            if let Some(msg) = map_key(&ev, app.mode()) {
                 app.update(msg, engine, Instant::now())
                     .map_err(Fatal::Engine)?;
             }
             if app.quit {
-                return Ok(());
+                return Ok(app.quit_line(&*engine));
             }
+        }
+        if let Some(cfg) = app.due(&*engine, Instant::now()) {
+            app.switching = true;
+            terminal
+                .draw(|f| view::render(&app, theme, f))
+                .map_err(Fatal::Terminal)?;
+            let result = engine.reconfigure(&cfg);
+            app.apply(result, &*engine, Instant::now())
+                .map_err(Fatal::Engine)?;
         }
         let now = Instant::now();
         let snap = engine.snapshot().map_err(Fatal::Engine)?;

@@ -22,6 +22,13 @@ extern "C" {
 #define RT_FLAG_READ_ONLY 1
 #define RT_FLAG_TOGGLE    2
 
+#define RT_RECONF_APPLIED     0
+#define RT_RECONF_ROLLED_BACK 1
+#define RT_RECONF_STOPPED     2
+
+#define RT_ID_BYTES   256
+#define RT_NAME_BYTES 128
+
 typedef struct rt_session rt_session;
 
 typedef struct {
@@ -66,6 +73,23 @@ typedef struct {
     char     device_error[256];                 /* empty unless the backend reported one */
 } rt_snapshot;
 
+typedef struct {
+    char    id[RT_ID_BYTES];          /* never truncated: entries whose id does not fit are dropped */
+    char    name[RT_NAME_BYTES];      /* truncated on a UTF-8 boundary */
+    int32_t max_input_channels, max_output_channels;
+    double  default_sample_rate;
+    uint8_t is_default_input, is_default_output;
+} rt_device_info;
+
+typedef struct {
+    char    backend[16];              /* the value --backend takes */
+    char    input_id[RT_ID_BYTES];    /* empty = system default */
+    char    output_id[RT_ID_BYTES];
+    double  sample_rate;
+    int32_t block_frames;             /* 0 = driver minimum */
+    uint8_t exclusive;
+} rt_config_desc;
+
 rt_session* rt_session_create(void);
 void        rt_session_destroy(rt_session* s);
 int32_t     rt_session_open(rt_session* s, const rt_open_config* cfg);
@@ -78,6 +102,10 @@ int32_t     rt_session_strip(const rt_session* s, int32_t strip, rt_strip_desc* 
 int32_t     rt_session_param(const rt_session* s, int32_t strip, int32_t param, rt_param_desc* out);
 int32_t     rt_session_set_param(rt_session* s, int32_t strip, int32_t param, double value);
 int32_t     rt_session_snapshot(rt_session* s, rt_snapshot* out);
+
+int32_t     rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total);
+int32_t     rt_session_config(const rt_session* s, rt_config_desc* out);
+int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
 
 uint64_t    rt_hist_percentile_ns(const uint64_t counts[RT_HIST_BUCKETS], double p);
 uint64_t    rt_hist_bucket_upper_ns(int32_t bucket);

@@ -30,6 +30,28 @@ std::optional<Backend> backendFromName(std::string_view name) {
     return std::nullopt;
 }
 
+Backend resolveBackend(Backend b) {
+    if (b != Backend::Default) return b;
+#if defined(_WIN32)
+    return Backend::Wasapi;
+#elif defined(RT_HAVE_ALSA)
+    return Backend::Alsa;
+#else
+    return Backend::Null;
+#endif
+}
+
+std::string_view backendKey(Backend b) {
+    switch (b) {
+    case Backend::Wasapi:  return "wasapi";
+    case Backend::Asio:    return "asio";
+    case Backend::Alsa:    return "alsa";
+    case Backend::Null:    return "null";
+    case Backend::Default: break;
+    }
+    return "default";
+}
+
 std::vector<std::string> availableBackends() {
     std::vector<std::string> v;
 #if defined(_WIN32)

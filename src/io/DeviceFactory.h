@@ -18,4 +18,7 @@ const char* backendName(Backend b);
 
 std::optional<Backend> backendFromName(std::string_view name);
 
+Backend          resolveBackend(Backend b);
+std::string_view backendKey(Backend b);
+
 } // namespace rt

@@ -63,6 +63,23 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_snapshot, channels);
     FIELD(rt_snapshot, running);
     FIELD(rt_snapshot, device_error);
+
+    LAYOUT(rt_device_info);
+    FIELD(rt_device_info, id);
+    FIELD(rt_device_info, name);
+    FIELD(rt_device_info, max_input_channels);
+    FIELD(rt_device_info, max_output_channels);
+    FIELD(rt_device_info, default_sample_rate);
+    FIELD(rt_device_info, is_default_input);
+    FIELD(rt_device_info, is_default_output);
+
+    LAYOUT(rt_config_desc);
+    FIELD(rt_config_desc, backend);
+    FIELD(rt_config_desc, input_id);
+    FIELD(rt_config_desc, output_id);
+    FIELD(rt_config_desc, sample_rate);
+    FIELD(rt_config_desc, block_frames);
+    FIELD(rt_config_desc, exclusive);
     return v;
 }
 
@@ -70,7 +87,7 @@ std::vector<std::uint64_t> cLayout() {
 
 TEST_CASE("rust mirrors match the C header", "[ffi]") {
     const std::vector<std::uint64_t> expected = cLayout();
-    std::vector<std::uint64_t> actual(64, 0);
+    std::vector<std::uint64_t> actual(128, 0);
     const std::size_t n = rt_tui_layout_probe(actual.data(), actual.size());
     REQUIRE(n == expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
