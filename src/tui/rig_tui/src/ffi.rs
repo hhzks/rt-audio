@@ -22,6 +22,15 @@ pub const RT_RECONF_STOPPED: i32 = 2;
 pub const RT_ID_BYTES: usize = 256;
 pub const RT_NAME_BYTES: usize = 128;
 
+pub const RT_LAT_CONTROL: i32 = 0;
+pub const RT_LAT_MEASURE: i32 = 1;
+pub const RT_LAT_RUNNING: i32 = 1;
+pub const RT_LAT_DONE: i32 = 2;
+pub const RT_LAT_FAILED: i32 = 3;
+pub const RT_LAT_CANCELLED: i32 = 4;
+pub const RT_LAT_PHASE_CHAIN: i32 = 1;
+pub const RT_LAT_MAX_REPEATS: usize = 16;
+
 #[repr(C)]
 pub struct RtSession {
     _private: [u8; 0],
@@ -107,6 +116,43 @@ pub struct RtConfigDesc {
     pub exclusive: u8,
 }
 
+#[repr(C)]
+pub struct RtLatencySettings {
+    pub repeats: i32,
+    pub amplitude: f32,
+}
+
+#[repr(C)]
+pub struct RtLatencyRepeat {
+    pub lag_ms: f64,
+    pub correlation: f64,
+    pub psr: f64,
+    pub valid: u8,
+    pub polarity_inverted: u8,
+}
+
+#[repr(C)]
+pub struct RtLatencyStatus {
+    pub state: i32,
+    pub kind: i32,
+    pub phase: i32,
+    pub repeat: i32,
+    pub repeats: i32,
+    pub latency_mode: u8,
+    pub control_passed: u8,
+    pub chain_valid: u8,
+    pub clipped: u8,
+    pub kept: i32,
+    pub discarded: i32,
+    pub measured_ms: f64,
+    pub spread_ms: f64,
+    pub computed_ms: f64,
+    pub chain_measured_ms: f64,
+    pub chain_reported_frames: i32,
+    pub direct: [RtLatencyRepeat; RT_LAT_MAX_REPEATS],
+    pub message: [c_char; 256],
+}
+
 macro_rules! zeroed_ctor {
     ($($t:ty),*) => {$(
         impl $t {
@@ -124,7 +170,8 @@ zeroed_ctor!(
     RtDeviceDesc,
     RtSnapshot,
     RtDeviceInfo,
-    RtConfigDesc
+    RtConfigDesc,
+    RtLatencyStatus
 );
 
 unsafe extern "C" {
@@ -156,6 +203,15 @@ unsafe extern "C" {
         cfg: *const RtOpenConfig,
         outcome: *mut i32,
     ) -> i32;
+    pub fn rt_session_latency_enter(s: *mut RtSession) -> i32;
+    pub fn rt_session_latency_leave(s: *mut RtSession) -> i32;
+    pub fn rt_session_latency_start(
+        s: *mut RtSession,
+        kind: i32,
+        settings: *const RtLatencySettings,
+    ) -> i32;
+    pub fn rt_session_latency_cancel(s: *mut RtSession) -> i32;
+    pub fn rt_session_latency_status(s: *const RtSession, out: *mut RtLatencyStatus) -> i32;
     pub fn rt_hist_percentile_ns(counts: *const u64, p: f64) -> u64;
     pub fn rt_hist_bucket_upper_ns(bucket: i32) -> u64;
 }
@@ -181,5 +237,10 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtDeviceInfo; id, name, max_input_channels, max_output_channels,
         default_sample_rate, is_default_input, is_default_output);
     layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive);
+    layout!(v, RtLatencySettings; repeats, amplitude);
+    layout!(v, RtLatencyRepeat; lag_ms, correlation, psr, valid, polarity_inverted);
+    layout!(v, RtLatencyStatus; state, kind, phase, repeat, repeats, latency_mode,
+        control_passed, chain_valid, clipped, kept, discarded, measured_ms, spread_ms,
+        computed_ms, chain_measured_ms, chain_reported_frames, direct, message);
     v
 }

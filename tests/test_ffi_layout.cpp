@@ -80,6 +80,37 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_config_desc, sample_rate);
     FIELD(rt_config_desc, block_frames);
     FIELD(rt_config_desc, exclusive);
+
+    LAYOUT(rt_latency_settings);
+    FIELD(rt_latency_settings, repeats);
+    FIELD(rt_latency_settings, amplitude);
+
+    LAYOUT(rt_latency_repeat);
+    FIELD(rt_latency_repeat, lag_ms);
+    FIELD(rt_latency_repeat, correlation);
+    FIELD(rt_latency_repeat, psr);
+    FIELD(rt_latency_repeat, valid);
+    FIELD(rt_latency_repeat, polarity_inverted);
+
+    LAYOUT(rt_latency_status);
+    FIELD(rt_latency_status, state);
+    FIELD(rt_latency_status, kind);
+    FIELD(rt_latency_status, phase);
+    FIELD(rt_latency_status, repeat);
+    FIELD(rt_latency_status, repeats);
+    FIELD(rt_latency_status, latency_mode);
+    FIELD(rt_latency_status, control_passed);
+    FIELD(rt_latency_status, chain_valid);
+    FIELD(rt_latency_status, clipped);
+    FIELD(rt_latency_status, kept);
+    FIELD(rt_latency_status, discarded);
+    FIELD(rt_latency_status, measured_ms);
+    FIELD(rt_latency_status, spread_ms);
+    FIELD(rt_latency_status, computed_ms);
+    FIELD(rt_latency_status, chain_measured_ms);
+    FIELD(rt_latency_status, chain_reported_frames);
+    FIELD(rt_latency_status, direct);
+    FIELD(rt_latency_status, message);
     return v;
 }
 
