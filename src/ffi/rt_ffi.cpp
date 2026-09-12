@@ -13,6 +13,8 @@
 static_assert(RT_RECONF_APPLIED == static_cast<int>(rt::ReconfigureResult::Applied));
 static_assert(RT_RECONF_ROLLED_BACK == static_cast<int>(rt::ReconfigureResult::RolledBack));
 static_assert(RT_RECONF_STOPPED == static_cast<int>(rt::ReconfigureResult::Stopped));
+static_assert(RT_LAT_CONTROL == static_cast<int>(rt::LatencyKind::Control));
+static_assert(RT_LAT_MEASURE == static_cast<int>(rt::LatencyKind::Measure));
 
 struct rt_session {
     rt::Session         session;
@@ -234,6 +236,40 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
         s->lastError = "unknown exception";
         return RT_E_INTERNAL;
     }
+}
+
+int32_t rt_session_latency_enter(rt_session* s) {
+    return guarded(s, [](rt::Session& session) { session.latencyEnter(); });
+}
+
+int32_t rt_session_latency_leave(rt_session* s) {
+    return guarded(s, [](rt::Session& session) { session.latencyLeave(); });
+}
+
+int32_t rt_session_latency_start(rt_session* s, int32_t kind, const rt_latency_settings* settings) {
+    if (s == nullptr || settings == nullptr) return RT_E_ARG;
+    if (kind != RT_LAT_CONTROL && kind != RT_LAT_MEASURE) {
+        s->lastError = "unknown latency kind: " + std::to_string(kind);
+        return RT_E_ARG;
+    }
+    return guarded(s, [&](rt::Session& session) {
+        rt::LatencySettings ls;
+        ls.repeats   = settings->repeats;
+        ls.amplitude = settings->amplitude;
+        session.latencyStart(static_cast<rt::LatencyKind>(kind), ls);
+    });
+}
+
+int32_t rt_session_latency_cancel(rt_session* s) {
+    return guarded(s, [](rt::Session& session) {
+        if (!session.isOpen()) throw rt::SessionStateError("session is not open");
+        session.latencyCancel();
+    });
+}
+
+int32_t rt_session_latency_status(const rt_session* s, rt_latency_status* out) {
+    if (out == nullptr) return RT_E_ARG;
+    return guarded(s, [&](const rt::Session& session) { session.latencyStatus(*out); });
 }
 
 uint64_t rt_hist_percentile_ns(const uint64_t counts[RT_HIST_BUCKETS], double p) {

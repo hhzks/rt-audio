@@ -274,3 +274,45 @@ TEST_CASE("device info copy drops ids that do not fit", "[ffi]") {
     d.id.push_back('a');
     CHECK(!rt::toDeviceInfo(d, out));
 }
+
+TEST_CASE("latency calls check their arguments and state", "[ffi]") {
+    rt_latency_settings settings{5, 0.5f};
+    rt_latency_status st{};
+    CHECK(rt_session_latency_enter(nullptr) == RT_E_ARG);
+    CHECK(rt_session_latency_leave(nullptr) == RT_E_ARG);
+    CHECK(rt_session_latency_start(nullptr, RT_LAT_CONTROL, &settings) == RT_E_ARG);
+    CHECK(rt_session_latency_cancel(nullptr) == RT_E_ARG);
+    CHECK(rt_session_latency_status(nullptr, &st) == RT_E_ARG);
+
+    rt_session* s = rt_session_create();
+    CHECK(rt_session_latency_start(s, RT_LAT_CONTROL, nullptr) == RT_E_ARG);
+    CHECK(rt_session_latency_status(s, nullptr) == RT_E_ARG);
+    CHECK(rt_session_latency_enter(s) == RT_E_STATE);
+    CHECK(rt_session_latency_leave(s) == RT_E_STATE);
+    CHECK(rt_session_latency_start(s, RT_LAT_CONTROL, &settings) == RT_E_STATE);
+    CHECK(rt_session_latency_cancel(s) == RT_E_STATE);
+    CHECK(rt_session_latency_status(s, &st) == RT_E_STATE);
+
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_latency_start(s, RT_LAT_CONTROL, &settings) == RT_E_STATE);   // not in latency mode
+    CHECK(rt_session_latency_enter(s) == RT_OK);
+    CHECK(rt_session_latency_status(s, &st) == RT_OK);
+    CHECK(st.latency_mode == 1);
+    CHECK(st.state == RT_LAT_IDLE);
+    CHECK(st.control_passed == 0);
+
+    CHECK(rt_session_latency_start(s, 7, &settings) == RT_E_ARG);
+    rt_latency_settings zero{0, 0.5f};
+    CHECK(rt_session_latency_start(s, RT_LAT_CONTROL, &zero) == RT_E_ARG);
+    CHECK(rt_session_latency_start(s, RT_LAT_MEASURE, &settings) == RT_E_STATE);   // no control yet
+    char buf[128];
+    CHECK(rt_session_last_error(s, buf, sizeof buf) > 0);
+    CHECK(std::string(buf).find("negative control") != std::string::npos);
+
+    CHECK(rt_session_latency_cancel(s) == RT_OK);
+    CHECK(rt_session_latency_leave(s) == RT_OK);
+    CHECK(rt_session_latency_status(s, &st) == RT_OK);
+    CHECK(st.latency_mode == 0);
+    rt_session_destroy(s);
+}

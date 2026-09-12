@@ -144,6 +144,12 @@ int32_t     rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap
 int32_t     rt_session_config(const rt_session* s, rt_config_desc* out);
 int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
 
+int32_t     rt_session_latency_enter(rt_session* s);
+int32_t     rt_session_latency_leave(rt_session* s);
+int32_t     rt_session_latency_start(rt_session* s, int32_t kind, const rt_latency_settings* settings);
+int32_t     rt_session_latency_cancel(rt_session* s);
+int32_t     rt_session_latency_status(const rt_session* s, rt_latency_status* out);
+
 uint64_t    rt_hist_percentile_ns(const uint64_t counts[RT_HIST_BUCKETS], double p);
 uint64_t    rt_hist_bucket_upper_ns(int32_t bucket);
 
