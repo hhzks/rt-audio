@@ -65,6 +65,11 @@ keys; `q q` quits.
   single quotes, which PowerShell, POSIX shells and systemd accept; cmd.exe needs double quotes.
 - If the device stops, for example because a USB cable comes out, `rt_rig` tries to open it
   again every 2 s until it comes back.
+- Press `m` to measure the round-trip latency. The output is silent while the latency screen is
+  open. Run the negative control first (`c`, with the headphones away from the microphone), then
+  measure (`Enter`, with the headphones against the microphone). Each measurement adds a row with
+  its config, so you can compare block sizes and modes after a change with `o`. When you quit,
+  `rt_rig` prints the table.
 
 ## License
 

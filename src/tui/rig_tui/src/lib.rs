@@ -151,8 +151,8 @@ fn run(args: &Args) -> i32 {
     drop(engine);
 
     match result {
-        Ok(line) => {
-            if let Some(line) = line {
+        Ok(lines) => {
+            for line in lines {
                 println!("{line}");
             }
             0
@@ -173,7 +173,7 @@ fn ui_loop(
     engine: &mut FfiEngine,
     theme: &Theme,
     fps: u32,
-) -> Result<Option<String>, Fatal> {
+) -> Result<Vec<String>, Fatal> {
     let frame = Duration::from_secs(1) / fps;
     let mut app = App::new(&*engine, Instant::now());
     let mut fx = Fx::default();
@@ -189,7 +189,10 @@ fn ui_loop(
                     .map_err(Fatal::Engine)?;
             }
             if app.quit {
-                return Ok(app.quit_line(&*engine));
+                return Ok([app.quit_line(&*engine), app.quit_table()]
+                    .into_iter()
+                    .flatten()
+                    .collect());
             }
         }
         if let Some(cfg) = app.due(&*engine, Instant::now()) {
@@ -204,6 +207,7 @@ fn ui_loop(
         let now = Instant::now();
         let snap = engine.snapshot().map_err(Fatal::Engine)?;
         app.ingest(snap, &*engine, now);
+        app.poll_latency(&*engine).map_err(Fatal::Engine)?;
         let elapsed = now.saturating_duration_since(last);
         last = now;
         terminal
