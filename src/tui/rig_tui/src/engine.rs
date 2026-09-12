@@ -200,6 +200,7 @@ impl Engine for FfiEngine {
             engine_xruns: raw.engine_xruns,
             device_xruns: raw.device_xruns,
             capture_overruns: raw.capture_overruns,
+            capture_underruns: raw.capture_underruns,
             in_clips: raw.in_clips,
             out_clips: raw.out_clips,
             deadline_ns: raw.deadline_ns,

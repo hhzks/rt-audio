@@ -16,7 +16,7 @@ namespace rt {
 // from dropouts, regardless of what your average looks like.
 struct RtStats {
     std::atomic<std::uint64_t> callbackCount{0};
-    std::atomic<std::uint64_t> xruns{0};          // ring ran dry / overflowed
+    std::atomic<std::uint64_t> xruns{0};          // block over maxBlockFrames, or not prepared
     std::atomic<std::uint64_t> lastCallbackNanos{0};
     std::atomic<std::uint64_t> peakCallbackNanos{0};
     std::atomic<std::uint64_t> blockDeadlineNanos{0};

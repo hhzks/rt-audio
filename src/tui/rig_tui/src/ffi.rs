@@ -67,6 +67,7 @@ pub struct RtSnapshot {
     pub engine_xruns: u64,
     pub device_xruns: u64,
     pub capture_overruns: u64,
+    pub capture_underruns: u64,
     pub in_clips: u64,
     pub out_clips: u64,
     pub deadline_ns: u64,
@@ -128,8 +129,8 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtParamDesc; id, name, unit, min, max, def, taper, flags);
     layout!(v, RtStripDesc; name, param_count, latency_frames);
     layout!(v, RtDeviceDesc; backend, input, output, sample_rate, claimed_rtt_ms, block_frames, channels);
-    layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns, in_clips,
-        out_clips, deadline_ns, hist_window, in_peak, out_peak, params, channels, running,
-        device_error);
+    layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns,
+        capture_underruns, in_clips, out_clips, deadline_ns, hist_window, in_peak, out_peak,
+        params, channels, running, device_error);
     v
 }

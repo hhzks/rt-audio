@@ -114,6 +114,7 @@ void Session::snapshot(rt_snapshot& out) {
     out.engine_xruns     = s.xruns.load(std::memory_order_relaxed);
     out.device_xruns     = ds.xruns;
     out.capture_overruns = ds.captureOverruns;
+    out.capture_underruns = ds.captureUnderruns;
     out.in_clips         = s.inputClips.load(std::memory_order_relaxed);
     out.out_clips        = s.outputClips.load(std::memory_order_relaxed);
     out.deadline_ns      = s.blockDeadlineNanos.load(std::memory_order_relaxed);

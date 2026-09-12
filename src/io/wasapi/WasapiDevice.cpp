@@ -348,7 +348,7 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     captureRing_.reset(maxBlock * idx(engineCh) * 4);
 
     resampler_.prepare(engineCh, nominalRatio_);
-    drift_.prepare(captureRing_.capacity() / 2, 0.002);
+    ringTargetFrames_ = wasapiRingTargetFrames(capture_.bufferFrames, render_.bufferFrames);
 
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
@@ -386,6 +386,13 @@ void WasapiDevice::start() {
     if (running_.exchange(true)) return;
     if (thread_.joinable()) thread_.join();   // a thread that stopped on a fatal error
     lastHr_.store(0, std::memory_order_relaxed);
+
+    const std::size_t ch = idx(config_.numChannels);
+    captureStarted_ = false;
+    primeRing(captureRing_, ringTargetFrames_, ch);
+    resampler_.reset();
+    drift_.prepare(ringTargetFrames_ * ch, 0.002);
+
     ResetEvent(shutdownEvent_);
     thread_ = std::thread(&WasapiDevice::threadMain, this);
 }
@@ -409,6 +416,7 @@ void WasapiDevice::close() {
 DeviceStatus WasapiDevice::status() const {
     DeviceStatus s = status_;
     s.captureOverruns = captureOverruns_.load(std::memory_order_relaxed);
+    s.captureUnderruns = captureUnderruns_.load(std::memory_order_relaxed);
     s.xruns = xruns_.load(std::memory_order_relaxed);
     const long hr = lastHr_.load(std::memory_order_relaxed);
     if (hr != 0) {
@@ -425,8 +433,8 @@ bool WasapiDevice::fatal(HRESULT hr) noexcept {
     return true;
 }
 
-bool WasapiDevice::drainCapture() noexcept {
-    for (;;) {
+bool WasapiDevice::drainCapture(int maxPackets) noexcept {
+    for (int n = 0; n < maxPackets; ++n) {
         UINT32 packetFrames = 0;
         const HRESULT hrSize = captureService_->GetNextPacketSize(&packetFrames);
         if (FAILED(hrSize)) return !fatal(hrSize);
@@ -465,26 +473,35 @@ bool WasapiDevice::drainCapture() noexcept {
 
         if (pushEvictingOldest(captureRing_, resampleScratch_.data(), idx(produced) * ch, ch))
             captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+        captureStarted_ = true;
         captureService_->ReleaseBuffer(frames);
     }
+    return true;
 }
 
 bool WasapiDevice::fillRender() noexcept {
-    UINT32 padding = 0;
-    const HRESULT hrPad = render_.client->GetCurrentPadding(&padding);
-    if (FAILED(hrPad)) return !fatal(hrPad);
+    const RenderFrames rf = wasapiRenderFrames(
+        config_.exclusiveMode, render_.bufferFrames, [this](std::uint32_t& padding) {
+            return static_cast<std::int32_t>(render_.client->GetCurrentPadding(&padding));
+        });
+    if (rf.hr < 0) return !fatal(rf.hr);
 
-    const UINT32 framesToWrite = render_.bufferFrames - padding;
+    const UINT32 framesToWrite = rf.frames;
     if (framesToWrite == 0) return true;
 
     BYTE* out = nullptr;
     const HRESULT hrGet = renderService_->GetBuffer(framesToWrite, &out);
-    if (FAILED(hrGet)) return !fatal(hrGet);
+    if (FAILED(hrGet)) {
+        if (fatal(hrGet)) return false;
+        xruns_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
 
     const int         ch   = config_.numChannels;
     const std::size_t need = static_cast<std::size_t>(framesToWrite) * idx(ch);
 
-    captureRing_.popOrZero(engineIn_.data(), need);
+    if (popForRender(captureRing_, engineIn_.data(), need, captureStarted_))
+        captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
 
     callback_->audioDeviceProcess(engineIn_.data(), engineOut_.data(),
                                   static_cast<FrameCount>(framesToWrite));
@@ -526,8 +543,14 @@ void WasapiDevice::threadMain() {
             continue;
         }
 
-        if (r == WAIT_OBJECT_0 + 2) { if (!drainCapture()) break; continue; }
-        if (r == WAIT_OBJECT_0 + 1) { if (!drainCapture() || !fillRender()) break; continue; }
+        if (r == WAIT_OBJECT_0 + 2) {
+            if (!drainCapture(wasapiCaptureReads(config_.exclusiveMode, true))) break;
+            continue;
+        }
+        if (r == WAIT_OBJECT_0 + 1) {
+            if (!drainCapture(wasapiCaptureReads(config_.exclusiveMode, false)) || !fillRender()) break;
+            continue;
+        }
         break;                                   // WAIT_FAILED
     }
 

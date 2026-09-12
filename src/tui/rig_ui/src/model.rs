@@ -70,6 +70,7 @@ pub struct Snapshot {
     pub engine_xruns: u64,
     pub device_xruns: u64,
     pub capture_overruns: u64,
+    pub capture_underruns: u64,
     pub in_clips: u64,
     pub out_clips: u64,
     pub deadline_ns: u64,
@@ -88,6 +89,7 @@ impl Snapshot {
             engine_xruns: 0,
             device_xruns: 0,
             capture_overruns: 0,
+            capture_underruns: 0,
             in_clips: 0,
             out_clips: 0,
             deadline_ns: 0,
@@ -104,7 +106,7 @@ impl Snapshot {
     }
 
     pub fn dropouts(&self) -> u64 {
-        self.engine_xruns + self.device_xruns + self.capture_overruns
+        self.engine_xruns + self.device_xruns + self.capture_overruns + self.capture_underruns
     }
 }
 
@@ -370,7 +372,8 @@ mod tests {
         s.engine_xruns = 1;
         s.device_xruns = 2;
         s.capture_overruns = 4;
-        assert_eq!(s.dropouts(), 7);
+        s.capture_underruns = 8;
+        assert_eq!(s.dropouts(), 15);
     }
 
     #[test]

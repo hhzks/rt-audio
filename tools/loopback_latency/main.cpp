@@ -115,9 +115,14 @@ struct SweepAttempt {
     bool clipped = false;
 };
 
+std::uint64_t ringDropouts(const IAudioDevice& device) {
+    const DeviceStatus s = device.status();
+    return s.captureOverruns + s.captureUnderruns;
+}
+
 SweepAttempt runOneSweep(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
                           int maxLagFrames, double sampleRate) {
-    const auto devXrunsBefore = device.status().captureOverruns;
+    const auto devXrunsBefore = ringDropouts(device);
     const auto engXrunsBefore = engine ? engine->stats().xruns.load(std::memory_order_relaxed)
                                         : std::uint64_t{0};
 
@@ -130,7 +135,7 @@ SweepAttempt runOneSweep(IAudioDevice& device, LoopbackProbe& probe, AudioEngine
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    const auto devXrunsAfter = device.status().captureOverruns;
+    const auto devXrunsAfter = ringDropouts(device);
     const auto engXrunsAfter = engine ? engine->stats().xruns.load(std::memory_order_relaxed)
                                        : std::uint64_t{0};
 

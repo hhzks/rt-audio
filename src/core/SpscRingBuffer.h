@@ -42,6 +42,16 @@ public:
         return n;
     }
 
+    std::size_t pushSilence(std::size_t count) noexcept {
+        const std::size_t avail = writeAvailable();
+        const std::size_t n = count < avail ? count : avail;
+        auto w = writeIdx_.load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < n; ++i)
+            data_[(w + i) & mask_] = 0.0f;
+        writeIdx_.store(w + n, std::memory_order_release);
+        return n;
+    }
+
     // --- consumer side ---
     std::size_t readAvailable() const noexcept {
         const auto w = writeIdx_.load(std::memory_order_acquire);

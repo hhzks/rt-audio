@@ -28,4 +28,21 @@ inline bool pushEvictingOldest(SpscRingBuffer& ring, const float* src,
     return evicted;
 }
 
+// Empty the ring and refill it with `frames` of silence. Call only while
+// neither the producer nor the consumer is running.
+inline void primeRing(SpscRingBuffer& ring, std::size_t frames, std::size_t channels) noexcept {
+    ring.discard(ring.readAvailable());
+    ring.pushSilence(frames * channels);
+}
+
+// Silence, with the ring untouched, until the producer has pushed its first block.
+inline bool popForRender(SpscRingBuffer& ring, float* dst, std::size_t samples,
+                         bool producerStarted) noexcept {
+    if (!producerStarted) {
+        for (std::size_t i = 0; i < samples; ++i) dst[i] = 0.0f;
+        return false;
+    }
+    return ring.popOrZero(dst, samples);
+}
+
 } // namespace rt

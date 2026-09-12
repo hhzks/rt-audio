@@ -4,6 +4,7 @@
 #include "io/IAudioDevice.h"
 #include "io/wasapi/ComPtr.h"
 #include "io/wasapi/WasapiError.h"
+#include "io/wasapi/WasapiRender.h"
 #include "core/SampleConvert.h"
 #include "core/SpscRingBuffer.h"
 #include "core/DriftController.h"
@@ -54,7 +55,7 @@ private:
     void initEndpoint(Endpoint& ep, EDataFlow flow, const std::string& id,
                       FrameCount requestedFrames, bool exclusive);
     void threadMain();
-    bool drainCapture() noexcept;   // false: fatal error, stop the thread
+    bool drainCapture(int maxPackets) noexcept;   // false: fatal error, stop the thread
     bool fillRender() noexcept;
     bool fatal(HRESULT hr) noexcept;
 
@@ -70,12 +71,15 @@ private:
     std::thread       thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> captureOverruns_{0};
+    std::atomic<std::uint64_t> captureUnderruns_{0};
     std::atomic<std::uint64_t> xruns_{0};
     std::atomic<long>          lastHr_{0};
     HANDLE            shutdownEvent_ = nullptr;
     bool              comInitialized_ = false;
 
     SpscRingBuffer     captureRing_;   // capture thread -> render, in RENDER-rate engine layout
+    std::size_t        ringTargetFrames_ = 0;
+    bool               captureStarted_ = false;
     std::vector<float> engineIn_, engineOut_, convertScratch_, deviceScratch_, resampleScratch_;
 
     AsyncResampler  resampler_;
