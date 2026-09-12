@@ -16,6 +16,12 @@ pub const RT_TAPER_LOG: u8 = 1;
 pub const RT_FLAG_READ_ONLY: u8 = 1;
 pub const RT_FLAG_TOGGLE: u8 = 2;
 
+pub const RT_RECONF_APPLIED: i32 = 0;
+pub const RT_RECONF_ROLLED_BACK: i32 = 1;
+pub const RT_RECONF_STOPPED: i32 = 2;
+pub const RT_ID_BYTES: usize = 256;
+pub const RT_NAME_BYTES: usize = 128;
+
 #[repr(C)]
 pub struct RtSession {
     _private: [u8; 0],
@@ -80,6 +86,27 @@ pub struct RtSnapshot {
     pub device_error: [c_char; 256],
 }
 
+#[repr(C)]
+pub struct RtDeviceInfo {
+    pub id: [c_char; RT_ID_BYTES],
+    pub name: [c_char; RT_NAME_BYTES],
+    pub max_input_channels: i32,
+    pub max_output_channels: i32,
+    pub default_sample_rate: f64,
+    pub is_default_input: u8,
+    pub is_default_output: u8,
+}
+
+#[repr(C)]
+pub struct RtConfigDesc {
+    pub backend: [c_char; 16],
+    pub input_id: [c_char; RT_ID_BYTES],
+    pub output_id: [c_char; RT_ID_BYTES],
+    pub sample_rate: f64,
+    pub block_frames: i32,
+    pub exclusive: u8,
+}
+
 macro_rules! zeroed_ctor {
     ($($t:ty),*) => {$(
         impl $t {
@@ -91,7 +118,14 @@ macro_rules! zeroed_ctor {
         }
     )*};
 }
-zeroed_ctor!(RtParamDesc, RtStripDesc, RtDeviceDesc, RtSnapshot);
+zeroed_ctor!(
+    RtParamDesc,
+    RtStripDesc,
+    RtDeviceDesc,
+    RtSnapshot,
+    RtDeviceInfo,
+    RtConfigDesc
+);
 
 unsafe extern "C" {
     pub fn rt_session_create() -> *mut RtSession;
@@ -110,6 +144,18 @@ unsafe extern "C" {
     ) -> i32;
     pub fn rt_session_set_param(s: *mut RtSession, strip: i32, param: i32, value: f64) -> i32;
     pub fn rt_session_snapshot(s: *mut RtSession, out: *mut RtSnapshot) -> i32;
+    pub fn rt_session_enumerate(
+        s: *mut RtSession,
+        out: *mut RtDeviceInfo,
+        cap: i32,
+        total: *mut i32,
+    ) -> i32;
+    pub fn rt_session_config(s: *const RtSession, out: *mut RtConfigDesc) -> i32;
+    pub fn rt_session_reconfigure(
+        s: *mut RtSession,
+        cfg: *const RtOpenConfig,
+        outcome: *mut i32,
+    ) -> i32;
     pub fn rt_hist_percentile_ns(counts: *const u64, p: f64) -> u64;
     pub fn rt_hist_bucket_upper_ns(bucket: i32) -> u64;
 }
@@ -132,5 +178,8 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns,
         capture_underruns, in_clips, out_clips, deadline_ns, hist_window, in_peak, out_peak,
         params, channels, running, device_error);
+    layout!(v, RtDeviceInfo; id, name, max_input_channels, max_output_channels,
+        default_sample_rate, is_default_input, is_default_output);
+    layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive);
     v
 }

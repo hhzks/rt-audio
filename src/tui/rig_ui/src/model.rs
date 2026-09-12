@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 
 pub const HIST_BUCKETS: usize = 322;
@@ -48,6 +49,8 @@ impl Strip {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Device {
     pub backend: String,
+    pub input: String,
+    pub output: String,
     pub sample_rate: f64,
     pub block_frames: i32,
     pub channels: i32,
@@ -62,6 +65,56 @@ impl Device {
             0.0
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeviceEntry {
+    pub id: String,
+    pub name: String,
+    pub inputs: i32,
+    pub outputs: i32,
+    pub default_rate: f64,
+    pub default_in: bool,
+    pub default_out: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Config {
+    pub backend: String,
+    pub input: String,
+    pub output: String,
+    pub rate: f64,
+    pub block: i32,
+    pub exclusive: bool,
+}
+
+impl Config {
+    pub fn command_line(&self) -> String {
+        let mut s = format!("rt_rig --backend {}", self.backend);
+        if !self.input.is_empty() {
+            s += &format!(" --in '{}'", self.input);
+        }
+        if !self.output.is_empty() {
+            s += &format!(" --out '{}'", self.output);
+        }
+        if self.rate != 48000.0 {
+            s += &format!(" --rate {}", self.rate);
+        }
+        if self.block != 0 {
+            s += &format!(" --block {}", self.block);
+        }
+        if self.exclusive {
+            s += " --exclusive";
+        }
+        s
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outcome {
+    Applied,
+    RolledBack(String),
+    Stopped(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -138,6 +191,9 @@ pub trait Engine {
     fn snapshot(&mut self) -> Result<Snapshot, EngineError>;
     fn percentile_ns(&self, counts: &Histogram, p: f64) -> u64;
     fn bucket_upper_ns(&self, bucket: usize) -> u64;
+    fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
+    fn config(&self) -> &Config;
+    fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
 }
 
 fn param(
@@ -183,6 +239,23 @@ pub struct FakeEngine {
     pub next: Snapshot,
     pub sets: Vec<(usize, usize, f64)>,
     pub fail_next_set: Option<EngineError>,
+    pub devices: Vec<DeviceEntry>,
+    pub config: Config,
+    pub fail_ids: HashSet<String>,
+    pub reconfigures: Vec<Config>,
+    pub fail_devices: Option<EngineError>,
+}
+
+fn entry(id: &str, name: &str, inputs: i32, outputs: i32) -> DeviceEntry {
+    DeviceEntry {
+        id: id.into(),
+        name: name.into(),
+        inputs,
+        outputs,
+        default_rate: 48000.0,
+        default_in: id == "mic",
+        default_out: id == "phones",
+    }
 }
 
 impl FakeEngine {
@@ -236,6 +309,8 @@ impl FakeEngine {
         ];
         let device = Device {
             backend: "Null".into(),
+            input: "synthetic tone".into(),
+            output: "discard".into(),
             sample_rate: 48000.0,
             block_frames: 128,
             channels: 2,
@@ -253,7 +328,33 @@ impl FakeEngine {
             next,
             sets: Vec::new(),
             fail_next_set: None,
+            devices: vec![
+                entry("mic", "Mic", 2, 0),
+                entry("phones", "Phones", 0, 2),
+                entry("usb", "USB Interface", 2, 2),
+            ],
+            config: Config {
+                backend: "null".into(),
+                input: String::new(),
+                output: String::new(),
+                rate: 48000.0,
+                block: 128,
+                exclusive: false,
+            },
+            fail_ids: HashSet::new(),
+            reconfigures: Vec::new(),
+            fail_devices: None,
         }
+    }
+
+    fn fails(&self, c: &Config) -> bool {
+        self.fail_ids.contains(&c.input) || self.fail_ids.contains(&c.output)
+    }
+
+    fn stop(&mut self, why: &str) -> Outcome {
+        self.next.running = false;
+        self.next.device_error = why.to_owned();
+        Outcome::Stopped(why.to_owned())
     }
 }
 
@@ -313,6 +414,36 @@ impl Engine for FakeEngine {
 
     fn bucket_upper_ns(&self, bucket: usize) -> u64 {
         (bucket as u64 + 1) * 1000
+    }
+
+    fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
+        match &self.fail_devices {
+            Some(e) => Err(e.clone()),
+            None => Ok(self.devices.clone()),
+        }
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
+    fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
+        self.reconfigures.push(next.clone());
+        if !self.fails(next) {
+            self.config = next.clone();
+            self.next.running = true;
+            self.next.device_error.clear();
+            return Ok(Outcome::Applied);
+        }
+        if *next == self.config {
+            return Ok(self.stop("could not reopen the device"));
+        }
+        if !self.fails(&self.config) {
+            return Ok(Outcome::RolledBack(
+                "could not open the new config; restored the previous config".into(),
+            ));
+        }
+        Ok(self.stop("could not open the new config; could not restore the previous config"))
     }
 }
 
@@ -385,5 +516,75 @@ mod tests {
         };
         assert!((d.block_ms() - 2.6666666).abs() < 1e-6);
         assert_eq!(Device::default().block_ms(), 0.0);
+    }
+
+    fn cfg(backend: &str, input: &str) -> Config {
+        Config {
+            backend: backend.into(),
+            input: input.into(),
+            output: String::new(),
+            rate: 48000.0,
+            block: 0,
+            exclusive: false,
+        }
+    }
+
+    #[test]
+    fn command_line_lists_only_non_defaults() {
+        let c = Config {
+            block: 128,
+            exclusive: true,
+            ..cfg("wasapi", "{0.0.1}.{a}")
+        };
+        assert_eq!(
+            c.command_line(),
+            "rt_rig --backend wasapi --in '{0.0.1}.{a}' --block 128 --exclusive"
+        );
+        let d = Config {
+            rate: 44100.0,
+            output: "hw:1".into(),
+            ..cfg("alsa", "")
+        };
+        assert_eq!(
+            d.command_line(),
+            "rt_rig --backend alsa --out 'hw:1' --rate 44100"
+        );
+    }
+
+    #[test]
+    fn fake_reconfigure_follows_the_session_rules() {
+        let mut e = FakeEngine::rig();
+        let b = Config {
+            input: "mic".into(),
+            ..e.config.clone()
+        };
+        assert_eq!(e.reconfigure(&b).unwrap(), Outcome::Applied);
+        assert_eq!(e.config, b);
+
+        e.fail_ids.insert("usb".into());
+        let c = Config {
+            input: "usb".into(),
+            ..b.clone()
+        };
+        assert!(matches!(e.reconfigure(&c).unwrap(), Outcome::RolledBack(_)));
+        assert_eq!(e.config, b);
+
+        e.fail_ids.insert("mic".into());
+        assert!(matches!(e.reconfigure(&c).unwrap(), Outcome::Stopped(_)));
+        assert!(!e.snapshot().unwrap().running);
+        assert!(matches!(e.reconfigure(&b).unwrap(), Outcome::Stopped(m) if m.contains("reopen")));
+
+        e.fail_ids.clear();
+        assert_eq!(e.reconfigure(&b).unwrap(), Outcome::Applied);
+        assert!(e.snapshot().unwrap().running);
+        assert_eq!(e.reconfigures.len(), 5);
+    }
+
+    #[test]
+    fn fake_devices_can_fail() {
+        let mut e = FakeEngine::rig();
+        assert_eq!(e.devices().unwrap().len(), 3);
+        e.fail_devices = Some(EngineError::Device("boom".into()));
+        assert!(e.devices().is_err());
     }
 }
