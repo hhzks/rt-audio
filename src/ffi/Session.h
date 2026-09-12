@@ -12,10 +12,13 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace rt {
@@ -31,6 +34,19 @@ public:
 };
 
 enum class ReconfigureResult { Applied = 0, RolledBack = 1, Stopped = 2 };
+
+enum class LatencyKind { Control = 0, Measure = 1 };
+
+struct LatencySettings {
+    int   repeats   = 5;
+    float amplitude = 0.5f;
+};
+
+struct DevicePair {
+    Backend     backend = Backend::Null;
+    std::string input, output;
+    bool operator==(const DevicePair&) const = default;
+};
 
 // One caller thread only. Strip 0 is Master; strips 1..n are the rig chain.
 class Session {
@@ -52,6 +68,9 @@ public:
     void latencyEnter();
     void latencyLeave();
     bool latencyMode() const noexcept { return latencyMode_.load(std::memory_order_relaxed); }
+    void latencyStart(LatencyKind kind, const LatencySettings& settings);
+    void latencyCancel() noexcept;
+    void latencyStatus(rt_latency_status& out) const;
 
     const DeviceConfig& config() const;
     Backend             backend() const;
@@ -78,6 +97,10 @@ private:
     std::unique_ptr<IAudioDevice> makeAndStart(const DeviceConfig& config);
     std::optional<std::string>    tryStart(const DeviceConfig& config);
     void destroyDevice() noexcept;
+    void runLatency(LatencyKind kind, LatencySettings settings, std::stop_token stop);
+    std::uint64_t dropoutCount();
+    void drainCallbacks() noexcept;
+    bool controlPassedLocked(const DeviceConfig& config) const;
 
     AudioEngine                   engine_;      // declared first, destroyed last
     RigChain                      rig_{};
@@ -91,7 +114,12 @@ private:
     std::string                   message_;
     bool                          opened_ = false;
     std::atomic<bool>             latencyMode_{false};
-    std::unique_ptr<IAudioDevice> device_;      // declared last, destroyed first: joins the device thread
+    std::atomic<bool>             running_{false};
+    mutable std::mutex            latencyMutex_;
+    rt_latency_status             latency_{};
+    std::vector<DevicePair>       controlPassed_;
+    std::unique_ptr<IAudioDevice> device_;      // destroyed right after worker_: joins the device thread
+    std::jthread                  worker_;      // declared last, destroyed first
 };
 
 } // namespace rt

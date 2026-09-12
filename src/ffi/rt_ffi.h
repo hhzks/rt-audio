@@ -29,6 +29,19 @@ extern "C" {
 #define RT_ID_BYTES   256
 #define RT_NAME_BYTES 128
 
+#define RT_LAT_CONTROL 0
+#define RT_LAT_MEASURE 1
+
+#define RT_LAT_IDLE      0
+#define RT_LAT_RUNNING   1
+#define RT_LAT_DONE      2
+#define RT_LAT_FAILED    3
+#define RT_LAT_CANCELLED 4
+
+#define RT_LAT_PHASE_DIRECT 0
+#define RT_LAT_PHASE_CHAIN  1
+#define RT_LAT_MAX_REPEATS  16
+
 typedef struct rt_session rt_session;
 
 typedef struct {
@@ -89,6 +102,30 @@ typedef struct {
     int32_t block_frames;             /* 0 = driver minimum */
     uint8_t exclusive;
 } rt_config_desc;
+
+typedef struct {
+    int32_t repeats;                /* 1..RT_LAT_MAX_REPEATS */
+    float   amplitude;              /* (0, 1] */
+} rt_latency_settings;
+
+typedef struct {
+    double  lag_ms, correlation, psr;
+    uint8_t valid, polarity_inverted;
+} rt_latency_repeat;
+
+typedef struct {
+    int32_t state, kind, phase;
+    int32_t repeat, repeats;        /* progress: repeat 1..repeats */
+    uint8_t latency_mode;
+    uint8_t control_passed;         /* for the current device pair */
+    uint8_t chain_valid, clipped;
+    int32_t kept, discarded;
+    double  measured_ms, spread_ms, computed_ms;
+    double  chain_measured_ms;
+    int32_t chain_reported_frames;
+    rt_latency_repeat direct[RT_LAT_MAX_REPEATS];
+    char    message[256];
+} rt_latency_status;
 
 rt_session* rt_session_create(void);
 void        rt_session_destroy(rt_session* s);

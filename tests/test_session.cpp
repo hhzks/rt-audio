@@ -228,6 +228,22 @@ Session::DeviceMaker loopback(LoopbackRig& rig) {
     };
 }
 
+LatencySettings threeRepeats() {
+    LatencySettings s;
+    s.repeats = 3;
+    return s;
+}
+
+rt_latency_status waitLatency(Session& s) {
+    rt_latency_status st{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    for (;;) {
+        s.latencyStatus(st);
+        if (st.state != RT_LAT_RUNNING || std::chrono::steady_clock::now() > deadline) return st;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 } // namespace
 
 TEST_CASE("strip metadata before open", "[ffi]") {
@@ -513,4 +529,136 @@ TEST_CASE("latency mode needs an open session", "[session]") {
     Session s;
     CHECK_THROWS_AS(s.latencyEnter(), SessionStateError);
     CHECK_THROWS_AS(s.latencyLeave(), SessionStateError);
+}
+
+TEST_CASE("the control passes only without a physical path", "[session]") {
+    LoopbackRig rig;
+    rig.connected = false;
+    Session s(loopback(rig));
+    s.open(Backend::Null, nullConfig());
+    s.latencyEnter();
+
+    s.latencyStart(LatencyKind::Control, threeRepeats());
+    rt_latency_status st = waitLatency(s);
+    CHECK(st.state == RT_LAT_DONE);
+    CHECK(st.control_passed == 1);
+    CHECK(st.kept == 3);
+
+    rig.connected = true;
+    s.latencyStart(LatencyKind::Control, threeRepeats());
+    st = waitLatency(s);
+    CHECK(st.state == RT_LAT_FAILED);
+    CHECK(std::string(st.message).find("detected a peak") != std::string::npos);
+    CHECK(st.control_passed == 0);
+}
+
+TEST_CASE("a measurement recovers the loop delay and restores the chain", "[session]") {
+    LoopbackRig rig;
+    rig.connected = false;
+    Session s(loopback(rig));
+    s.setParam(3, Waveshaper::kDrive, 5.0);
+    s.setParam(3, Waveshaper::kMix, 0.7);
+    s.open(Backend::Null, nullConfig());
+    s.latencyEnter();
+
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Measure, threeRepeats()), SessionStateError);
+    s.latencyStart(LatencyKind::Control, threeRepeats());
+    REQUIRE(waitLatency(s).control_passed == 1);
+
+    rig.connected = true;
+    s.latencyStart(LatencyKind::Measure, threeRepeats());
+    const rt_latency_status st = waitLatency(s);
+    CHECK(st.state == RT_LAT_DONE);
+    CHECK_THAT(st.measured_ms, WithinAbs(480.0 / 48.0, 0.05));
+    CHECK_THAT(st.computed_ms, WithinAbs(1.0, 1e-9));
+    CHECK(st.chain_valid == 1);
+    CHECK(st.chain_measured_ms > 0.2);
+    CHECK(st.chain_measured_ms < 1.0);
+    CHECK(st.chain_reported_frames == 16);
+
+    CHECK_THAT(s.getParam(3, Waveshaper::kDrive), WithinAbs(5.0, 1e-12));
+    CHECK_THAT(s.getParam(3, Waveshaper::kMix), WithinAbs(0.7, 1e-12));
+    CHECK_THAT(s.getParam(2, NoiseGate::kOn), WithinAbs(1.0, 1e-12));
+    CHECK_THAT(s.getParam(0, 2), WithinAbs(0.0, 1e-12));   // Master bypass
+}
+
+TEST_CASE("calls that would disturb a run are refused; cancel ends it", "[session]") {
+    LoopbackRig rig;
+    rig.connected = false;
+    Session s(loopback(rig));
+    s.open(Backend::Null, nullConfig());
+    s.latencyEnter();
+
+    s.latencyStart(LatencyKind::Control, threeRepeats());
+    CHECK_THROWS_AS(s.reconfigure(nullConfig()), SessionStateError);
+    CHECK_THROWS_AS(s.latencyLeave(), SessionStateError);
+    CHECK_THROWS_AS(s.latencyEnter(), SessionStateError);
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, threeRepeats()), SessionStateError);
+    s.latencyCancel();
+    const rt_latency_status st = waitLatency(s);
+    CHECK(st.state == RT_LAT_CANCELLED);
+
+    rt_snapshot snap{};
+    s.snapshot(snap);
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 20));
+    CHECK(rig.outPeak.load() == 0.0f);                     // back to Silent
+    s.latencyLeave();
+}
+
+TEST_CASE("the control pass follows the device pair", "[session]") {
+    LoopbackRig rig;
+    rig.connected = false;
+    Session s(loopback(rig));
+    s.open(Backend::Null, nullConfig());
+    s.latencyEnter();
+    s.latencyStart(LatencyKind::Control, threeRepeats());
+    REQUIRE(waitLatency(s).control_passed == 1);
+
+    DeviceConfig bigger = nullConfig();
+    bigger.blockFrames = 512;
+    CHECK(s.reconfigure(bigger) == ReconfigureResult::Applied);
+    rt_latency_status st{};
+    s.latencyStatus(st);
+    CHECK(st.control_passed == 1);
+
+    DeviceConfig other = bigger;
+    other.inputId = "other";
+    CHECK(s.reconfigure(other) == ReconfigureResult::Applied);
+    s.latencyStatus(st);
+    CHECK(st.control_passed == 0);
+}
+
+TEST_CASE("a latency start checks the mode, the device and the settings", "[session]") {
+    LoopbackRig rig;
+    Session s(loopback(rig));
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, LatencySettings{}), SessionStateError);
+    s.open(Backend::Null, nullConfig());
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, LatencySettings{}), SessionStateError);
+    s.latencyEnter();
+
+    LatencySettings bad;
+    bad.repeats = 0;
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, bad), SessionArgError);
+    bad.repeats = RT_LAT_MAX_REPEATS + 1;
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, bad), SessionArgError);
+    bad.repeats = 5;
+    for (float a : {0.0f, 1.5f, std::numeric_limits<float>::quiet_NaN()}) {
+        bad.amplitude = a;
+        CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, bad), SessionArgError);
+    }
+
+    s.stop();
+    CHECK_THROWS_AS(s.latencyStart(LatencyKind::Control, LatencySettings{}), SessionStateError);
+}
+
+TEST_CASE("destroying the Session during a run is clean", "[session]") {
+    LoopbackRig rig;
+    rig.connected = false;
+    {
+        Session s(loopback(rig));
+        s.open(Backend::Null, nullConfig());
+        s.latencyEnter();
+        s.latencyStart(LatencyKind::Control, threeRepeats());
+    }
+    SUCCEED();
 }
