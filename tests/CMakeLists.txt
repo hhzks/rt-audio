@@ -54,6 +54,8 @@ if(TARGET rt_rig)
     set_tests_properties(rt_rig_help PROPERTIES PASS_REGULAR_EXPRESSION "--backend")
     add_test(NAME rt_rig_bad_backend COMMAND rt_rig --backend nosuch)
     set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch")
+    add_test(NAME rt_rig_bad_ring COMMAND rt_rig --backend null --ring 2.5)
+    set_tests_properties(rt_rig_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 2.5")
 endif()
 
 if(RT_TUI_ENABLED)

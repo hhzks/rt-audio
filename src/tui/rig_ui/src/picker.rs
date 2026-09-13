@@ -331,6 +331,7 @@ mod tests {
             rate: 48000.0,
             block: 128,
             exclusive: false,
+            ring_blocks: 2.0,
         }
     }
 

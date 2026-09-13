@@ -22,6 +22,7 @@ pub struct OpenOptions {
     pub rate: f64,
     pub block: i32,
     pub exclusive: bool,
+    pub ring: f64,
 }
 
 pub struct FfiEngine {
@@ -152,6 +153,7 @@ impl FfiEngine {
             sample_rate: o.rate,
             block_frames: o.block,
             exclusive: u8::from(o.exclusive),
+            ring_blocks: o.ring,
         };
         // SAFETY: `e.s` is live; `cfg` and the CStrings it points to outlive the call.
         e.check(unsafe { ffi::rt_session_open(e.s, &cfg) })?;
@@ -212,6 +214,7 @@ impl FfiEngine {
             rate: c.sample_rate,
             block: c.block_frames,
             exclusive: c.exclusive != 0,
+            ring_blocks: c.ring_blocks,
         })
     }
 
@@ -352,6 +355,7 @@ impl Engine for FfiEngine {
             sample_rate: next.rate,
             block_frames: next.block,
             exclusive: u8::from(next.exclusive),
+            ring_blocks: next.ring_blocks,
         };
         let mut outcome: i32 = -1;
         // SAFETY: `self.s` is live; `cfg`, the CStrings it points to and `outcome` outlive the call.

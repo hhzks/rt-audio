@@ -87,6 +87,7 @@ pub struct Config {
     pub rate: f64,
     pub block: i32,
     pub exclusive: bool,
+    pub ring_blocks: f64,
 }
 
 impl Config {
@@ -106,6 +107,9 @@ impl Config {
         }
         if self.exclusive {
             s += " --exclusive";
+        }
+        if self.ring_blocks != 2.0 {
+            s += &format!(" --ring {}", self.ring_blocks);
         }
         s
     }
@@ -410,6 +414,7 @@ impl FakeEngine {
                 rate: 48000.0,
                 block: 128,
                 exclusive: false,
+                ring_blocks: 2.0,
             },
             fail_ids: HashSet::new(),
             reconfigures: Vec::new(),
@@ -650,6 +655,7 @@ mod tests {
             rate: 48000.0,
             block: 0,
             exclusive: false,
+            ring_blocks: 2.0,
         }
     }
 
@@ -673,6 +679,11 @@ mod tests {
             d.command_line(),
             "rt_rig --backend alsa --out 'hw:1' --rate 44100"
         );
+        let r = Config {
+            ring_blocks: 1.5,
+            ..cfg("wasapi", "")
+        };
+        assert_eq!(r.command_line(), "rt_rig --backend wasapi --ring 1.5");
     }
 
     #[test]

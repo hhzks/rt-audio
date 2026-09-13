@@ -51,6 +51,7 @@ typedef struct {
     double      sample_rate;
     int32_t     block_frames; /* 0 = driver minimum */
     uint8_t     exclusive;
+    double      ring_blocks;  /* 0 = default (2.0); else 1.0..2.0 */
 } rt_open_config;
 
 typedef struct {
@@ -101,6 +102,7 @@ typedef struct {
     double  sample_rate;
     int32_t block_frames;             /* 0 = driver minimum */
     uint8_t exclusive;
+    double  ring_blocks;
 } rt_config_desc;
 
 typedef struct {

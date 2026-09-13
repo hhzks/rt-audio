@@ -256,6 +256,37 @@ TEST_CASE("device ids that do not fit are rejected", "[ffi]") {
     rt_session_destroy(s);
 }
 
+TEST_CASE("the ring margin crosses the C ABI", "[ffi]") {
+    rt_session* s = rt_session_create();
+    rt_open_config cfg = nullConfig();
+    cfg.ring_blocks = 2.5;
+    CHECK(rt_session_open(s, &cfg) == RT_E_ARG);
+    char buf[128];
+    CHECK(rt_session_last_error(s, buf, sizeof buf) > 0);
+    CHECK(std::string(buf) == "ring margin must be 1.0 to 2.0 blocks, got 2.5");
+    cfg.ring_blocks = std::numeric_limits<double>::quiet_NaN();
+    CHECK(rt_session_open(s, &cfg) == RT_E_ARG);
+
+    cfg.ring_blocks = 0.0;
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    rt_config_desc c{};
+    REQUIRE(rt_session_config(s, &c) == RT_OK);
+    CHECK_THAT(c.ring_blocks, WithinAbs(2.0, 1e-12));
+
+    int32_t outcome = -1;
+    cfg.ring_blocks = 1.5;
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
+    CHECK(outcome == RT_RECONF_APPLIED);
+    REQUIRE(rt_session_config(s, &c) == RT_OK);
+    CHECK_THAT(c.ring_blocks, WithinAbs(1.5, 1e-12));
+
+    cfg.ring_blocks = 0.5;
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
+    REQUIRE(rt_session_config(s, &c) == RT_OK);
+    CHECK_THAT(c.ring_blocks, WithinAbs(1.5, 1e-12));
+    rt_session_destroy(s);
+}
+
 TEST_CASE("device info copy drops ids that do not fit", "[ffi]") {
     rt::DeviceInfo d;
     d.id   = std::string(RT_ID_BYTES - 1, 'a');
