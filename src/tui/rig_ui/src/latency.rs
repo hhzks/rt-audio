@@ -1,9 +1,17 @@
 use crate::model::{Config, Device, LatencyKind, LatencyState, LatencyStatus};
-use crate::picker::khz;
 
 pub const LEVELS_DB: [f64; 9] = [-24.0, -21.0, -18.0, -15.0, -12.0, -9.0, -6.0, -3.0, 0.0];
 const DEFAULT_LEVEL: usize = 6;
 pub const UNSTABLE_MS: f64 = 1.0;
+
+fn short_rate(rate: f64) -> String {
+    let k = rate / 1000.0;
+    if k.fract() == 0.0 {
+        format!("{k:.0}k")
+    } else {
+        format!("{k:.1}k")
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -36,6 +44,7 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LatencyRow {
     pub label: String,
+    pub ring_blocks: f64,
     pub measured_ms: f64,
     pub spread_ms: f64,
     pub computed_ms: f64,
@@ -53,10 +62,11 @@ impl LatencyRow {
         };
         LatencyRow {
             label: format!(
-                "{mode} {} fr {}",
+                "{mode} {}/{}",
                 device.block_frames,
-                khz(device.sample_rate)
+                short_rate(device.sample_rate)
             ),
+            ring_blocks: config.ring_blocks,
             measured_ms: status.measured_ms,
             spread_ms: status.spread_ms,
             computed_ms: status.computed_ms,
@@ -291,7 +301,8 @@ mod tests {
         };
         assert!(s.ingest(running).is_none());
         let row = s.ingest(done_measure()).expect("one row");
-        assert_eq!(row.label, "excl 144 fr 48 kHz");
+        assert_eq!(row.label, "excl 144/48k");
+        assert_eq!(row.ring_blocks, 2.0);
         assert_eq!(row.chain_ms, Some(0.41));
         assert!(!row.unstable);
         assert!((row.unaccounted_ms() - 15.56).abs() < 1e-9);
@@ -333,7 +344,7 @@ mod tests {
     #[test]
     fn row_labels_and_flags() {
         let shared = LatencyRow::new(&wasapi(false), &device(1056, 48000.0), &done_measure());
-        assert_eq!(shared.label, "shared 1056 fr 48 kHz");
+        assert_eq!(shared.label, "shared 1056/48k");
 
         let alsa = Config {
             backend: "alsa".into(),
@@ -345,7 +356,7 @@ mod tests {
             ..done_measure()
         };
         let row = LatencyRow::new(&alsa, &device(256, 44100.0), &noisy);
-        assert_eq!(row.label, "alsa 256 fr 44.1 kHz");
+        assert_eq!(row.label, "alsa 256/44.1k");
         assert!(row.unstable);
         assert!(row.clipped);
 
@@ -357,5 +368,12 @@ mod tests {
             LatencyRow::new(&alsa, &device(256, 48000.0), &no_chain).chain_ms,
             None
         );
+
+        let tight = Config {
+            ring_blocks: 1.25,
+            ..wasapi(true)
+        };
+        let row = LatencyRow::new(&tight, &device(144, 48000.0), &done_measure());
+        assert_eq!(row.ring_blocks, 1.25);
     }
 }
