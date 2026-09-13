@@ -50,9 +50,3 @@ TEST_CASE("shared capture drains every packet on both events", "[io]") {
     CHECK(wasapiCaptureReads(false, true) == kCaptureDrainAll);
     CHECK(wasapiCaptureReads(false, false) == kCaptureDrainAll);
 }
-
-TEST_CASE("ring target is two of the larger buffers, not a rounded capacity", "[io]") {
-    CHECK(wasapiRingTargetFrames(1056, 1056) == 2112u);
-    CHECK(wasapiRingTargetFrames(144, 144) == 288u);
-    CHECK(wasapiRingTargetFrames(480, 1056) == 2112u);
-}

@@ -38,6 +38,7 @@ private:
     snd_pcm_t* capture_ = nullptr;
     snd_pcm_t* render_  = nullptr;
     snd_pcm_uframes_t renderBufferFrames_ = 0;
+    std::size_t       ringTargetFrames_ = 0;
 
     IAudioCallback*   callback_ = nullptr;
     DeviceConfig      config_{};
