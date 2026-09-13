@@ -107,6 +107,13 @@ pub extern "C" fn rt_tui_main() -> i32 {
 }
 
 fn run(args: &Args) -> i32 {
+    if !(1.0..=2.0).contains(&args.ring) {
+        eprintln!(
+            "rt-rig: invalid argument: ring margin must be 1.0 to 2.0 blocks, got {}",
+            args.ring
+        );
+        return 2;
+    }
     let options = OpenOptions {
         backend: args.backend.clone(),
         input: args.input.clone(),
