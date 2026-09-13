@@ -2,6 +2,7 @@ use crate::model::{Config, DeviceEntry};
 
 pub const BLOCKS: [i32; 8] = [0, 32, 64, 128, 256, 512, 1024, 2048];
 pub const RATES: [f64; 4] = [44100.0, 48000.0, 88200.0, 96000.0];
+pub const RINGS: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -10,6 +11,7 @@ pub enum Field {
     Mode,
     Block,
     Rate,
+    Ring,
 }
 
 impl Field {
@@ -20,6 +22,7 @@ impl Field {
             Field::Mode => "mode",
             Field::Block => "block",
             Field::Rate => "rate",
+            Field::Ring => "ring",
         }
     }
 }
@@ -52,6 +55,14 @@ pub fn khz(rate: f64) -> String {
         format!("{k:.0} kHz")
     } else {
         format!("{k:.1} kHz")
+    }
+}
+
+fn blocks(v: f64) -> String {
+    if v == 1.0 {
+        "1 block".into()
+    } else {
+        format!("{v} blocks")
     }
 }
 
@@ -115,6 +126,7 @@ impl Picker {
         }
         f.push(Field::Block);
         f.push(Field::Rate);
+        f.push(Field::Ring);
         f
     }
 
@@ -122,6 +134,7 @@ impl Picker {
         match field {
             Field::Rate => self.is_wasapi(),
             Field::Block => self.is_wasapi() && self.edited.exclusive,
+            Field::Ring => self.edited.backend == "null",
             _ => false,
         }
     }
@@ -241,6 +254,12 @@ impl Picker {
                 self.edited.rate = next;
                 changed
             }
+            Field::Ring => {
+                let next = step_list(&RINGS, self.edited.ring_blocks, dir);
+                let changed = next != self.edited.ring_blocks;
+                self.edited.ring_blocks = next;
+                changed
+            }
         }
     }
 
@@ -285,6 +304,8 @@ impl Picker {
             } else {
                 self.edited.rate
             }),
+            Field::Ring if self.read_only(Field::Ring) => "n/a".into(),
+            Field::Ring => blocks(self.edited.ring_blocks),
         }
     }
 
@@ -294,6 +315,7 @@ impl Picker {
             Field::Block if self.is_wasapi() && !self.read_only(Field::Block) => {
                 "the driver can round it"
             }
+            Field::Ring if !self.read_only(Field::Ring) => "lower: less delay, more risk",
             _ => "",
         }
     }
@@ -385,7 +407,8 @@ mod tests {
                 Field::Output,
                 Field::Mode,
                 Field::Block,
-                Field::Rate
+                Field::Rate,
+                Field::Ring
             ]
         );
         assert!(p.read_only(Field::Rate));
@@ -403,7 +426,9 @@ mod tests {
         assert_eq!(p.note(Field::Block), "");
 
         p.move_cursor(1);
-        assert_eq!(p.selected(), Field::Mode, "block and rate are read-only");
+        assert_eq!(p.selected(), Field::Ring, "block and rate are read-only");
+        p.move_cursor(-1);
+        assert_eq!(p.selected(), Field::Mode);
         p.move_cursor(-1);
         assert_eq!(p.selected(), Field::Output);
     }
@@ -413,7 +438,13 @@ mod tests {
         let mut p = Picker::new(config("alsa"), Ok(devices()));
         assert_eq!(
             p.visible_fields(),
-            [Field::Input, Field::Output, Field::Block, Field::Rate]
+            [
+                Field::Input,
+                Field::Output,
+                Field::Block,
+                Field::Rate,
+                Field::Ring
+            ]
         );
         assert!(!p.read_only(Field::Rate));
         assert_eq!(p.note(Field::Rate), "");
@@ -442,6 +473,35 @@ mod tests {
         assert_eq!(p.label(Field::Block, 48000.0, " · "), "driver minimum");
         assert!(p.step(1));
         assert_eq!(p.edited.block, 32);
+    }
+
+    #[test]
+    fn ring_steps_by_a_quarter_block_and_stops_at_the_ends() {
+        let mut p = Picker::new(config("alsa"), Ok(devices()));
+        p.select(Field::Ring);
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "2 blocks");
+        assert_eq!(p.note(Field::Ring), "lower: less delay, more risk");
+        assert!(!p.step(1));
+        assert!(p.step(-1));
+        assert_eq!(p.edited.ring_blocks, 1.75);
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "1.75 blocks");
+        for _ in 0..3 {
+            assert!(p.step(-1));
+        }
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "1 block");
+        assert!(!p.step(-1));
+        p.edited.ring_blocks = 1.3;
+        assert!(p.step(1));
+        assert_eq!(p.edited.ring_blocks, 1.5);
+    }
+
+    #[test]
+    fn null_shows_the_ring_as_read_only() {
+        let p = Picker::new(config("null"), Ok(devices()));
+        assert!(p.visible_fields().contains(&Field::Ring));
+        assert!(p.read_only(Field::Ring));
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "n/a");
+        assert_eq!(p.note(Field::Ring), "");
     }
 
     #[test]

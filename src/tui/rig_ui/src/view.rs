@@ -1181,6 +1181,10 @@ mod tests {
         assert!(has(&r, "mode    ◂ shared ▸"));
         assert!(has(&r, "◂ 128 fr · 2.67 ms ▸   the driver can round it"));
         assert!(has(&r, "48 kHz   set by the device mix format"));
+        assert!(has(
+            &r,
+            "ring    ◂ 2 blocks ▸   lower: less delay, more risk"
+        ));
         assert!(has(&r, "now  Null · 48 kHz · 128 fr"));
         assert!(r[23].contains("R rescan"), "{}", r[23]);
     }
