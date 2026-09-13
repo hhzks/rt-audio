@@ -58,6 +58,16 @@ if(TARGET rt_rig)
     set_tests_properties(rt_rig_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 2.5")
 endif()
 
+if(TARGET rt_audio)
+    add_test(NAME rt_audio_bad_ring COMMAND rt_audio --backend null --ring 3)
+    set_tests_properties(rt_audio_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3")
+endif()
+
+if(TARGET loopback_latency)
+    add_test(NAME loopback_latency_bad_ring COMMAND loopback_latency --ring 3)
+    set_tests_properties(loopback_latency_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3")
+endif()
+
 if(RT_TUI_ENABLED)
     add_test(NAME rig_ui_tests
              COMMAND ${RT_CARGO} test -p rig_ui --locked --target-dir ${CMAKE_BINARY_DIR}/cargo-test

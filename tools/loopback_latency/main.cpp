@@ -60,6 +60,7 @@ void printUsage() {
         "  --rate <hz>               requested sample rate (default: 48000)\n"
         "  --block <frames>          requested block size (default: driver minimum)\n"
         "  --exclusive               WASAPI exclusive mode\n"
+        "  --ring <blocks>           capture ring margin, 1.0 to 2.0 (default: 2.0)\n"
         "  --repeats <n>             sweep repeats (default: 5)\n"
         "  --sweep-ms <ms>           sweep duration (default: 400)\n"
         "  --sweep-lo <hz>           sweep start frequency (default: 200)\n"
@@ -199,6 +200,7 @@ int main(int argc, char** argv) {
     int repeats = 5;
     SweepConfig sweepCfg;
     double maxLatencyMs = 200.0;
+    double ringBlocks = kDefaultRingBlocks;
 
     try {
         for (int i = 1; i < argc; ++i) {
@@ -216,6 +218,7 @@ int main(int argc, char** argv) {
             else if (arg == "--rate")           sampleRate = num();
             else if (arg == "--block")          blockFrames = static_cast<FrameCount>(num());
             else if (arg == "--exclusive")      exclusive = true;
+            else if (arg == "--ring")           ringBlocks = num();
             else if (arg == "--repeats")        repeats = static_cast<int>(num());
             else if (arg == "--sweep-ms")       sweepCfg.seconds = num() / 1000.0;
             else if (arg == "--sweep-lo")       sweepCfg.loHz = num();
@@ -232,6 +235,12 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
+        printUsage();
+        return 1;
+    }
+
+    if (!validRingBlocks(ringBlocks)) {
+        std::cerr << "error: ring margin must be 1.0 to 2.0 blocks, got " << ringBlocks << "\n";
         printUsage();
         return 1;
     }
@@ -283,6 +292,7 @@ int main(int argc, char** argv) {
         devCfg.sampleRate    = sampleRate;
         devCfg.blockFrames   = blockFrames;
         devCfg.exclusiveMode = exclusive;
+        devCfg.ringBlocks    = ringBlocks;
 
         LoopbackProbe probe;
         AudioEngine   engine;
@@ -301,7 +311,7 @@ int main(int argc, char** argv) {
 
         std::cout << "device       : in \"" << inName << "\"  out \"" << outName << "\"\n"
                   << "               " << st.backendName << ", " << st.sampleRate << " Hz, "
-                  << st.blockFrames << " frames\n";
+                  << st.blockFrames << " frames, ring " << ringBlocks << " blocks\n";
 
         PhaseResult phaseA;
         {
@@ -360,7 +370,7 @@ int main(int argc, char** argv) {
         const double unaccountedMs = measuredMs - computedMs;
 
         std::cout << std::fixed << std::setprecision(2)
-                  << "\ncomputed  (driver)   " << std::setw(6) << computedMs << " ms\n"
+                  << "\ncomputed  (buffers)  " << std::setw(6) << computedMs << " ms\n"
                   << "measured  (loopback) " << std::setw(6) << measuredMs << " ms   +/- "
                   << (spreadMs / 2.0) << " ms  (" << phaseA.validCount() << " repeats, r "
                   << (rep ? rep->peakCorrelation : 0.0)
@@ -438,6 +448,7 @@ int main(int argc, char** argv) {
               << "  \"device\": \"" << escapeJson(st.backendName) << "\",\n"
               << "  \"sampleRate\": " << st.sampleRate << ",\n"
               << "  \"blockFrames\": " << st.blockFrames << ",\n"
+              << "  \"ringBlocks\": " << ringBlocks << ",\n"
               << "  \"computedMs\": " << computedMs << ",\n"
               << "  \"measuredMs\": " << measuredMs << ",\n"
               << "  \"spreadMs\": " << spreadMs << ",\n"
