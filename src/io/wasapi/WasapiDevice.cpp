@@ -4,6 +4,7 @@
 
 #include "core/ChannelMap.h"
 #include "core/RingPush.h"
+#include "io/Buffering.h"
 
 #include <functiondiscoverykeys_devpkey.h>
 #include <mmreg.h>
@@ -319,6 +320,8 @@ void WasapiDevice::initEndpoint(Endpoint& ep, EDataFlow flow, const std::string&
 
 void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     if (!callback) throw std::invalid_argument("WasapiDevice::open: null callback");
+    if (!validRingBlocks(config.ringBlocks))
+        throw std::invalid_argument("WasapiDevice::open: ringBlocks outside 1.0..2.0");
     close();
 
     config_   = config;
@@ -348,7 +351,8 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     captureRing_.reset(maxBlock * idx(engineCh) * 4);
 
     resampler_.prepare(engineCh, nominalRatio_);
-    ringTargetFrames_ = wasapiRingTargetFrames(capture_.bufferFrames, render_.bufferFrames);
+    ringTargetFrames_ = ringTargetFrames(std::max(capture_.bufferFrames, render_.bufferFrames),
+                                         config.ringBlocks);
 
     engineIn_.assign(maxBlock * idx(engineCh), 0.0f);
     engineOut_.assign(maxBlock * idx(engineCh), 0.0f);
@@ -368,10 +372,11 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
                                                           : "WASAPI (shared)")
                         + " in " + formatName(capture_.sampleFormat)
                         + " out " + formatName(render_.sampleFormat);
-    status_.estimatedRoundTripMs =
-        1000.0 * (capture_.bufferFrames + render_.bufferFrames) / sr
-      + 1000.0 * AsyncResampler::latencyFrames()
-            / static_cast<double>(capture_.format->nSamplesPerSec);
+    status_.estimatedRoundTripMs = bufferedRoundTripMs(
+        static_cast<double>(capture_.bufferFrames), static_cast<double>(render_.bufferFrames),
+        static_cast<double>(ringTargetFrames_), sr,
+        static_cast<double>(AsyncResampler::latencyFrames()),
+        static_cast<double>(capture_.format->nSamplesPerSec));
 
     if (capture_.format->nSamplesPerSec != render_.format->nSamplesPerSec)
         status_.backendName += " asrc " + std::to_string(capture_.format->nSamplesPerSec)

@@ -621,6 +621,12 @@ TEST_CASE("the control pass follows the device pair", "[session]") {
     s.latencyStatus(st);
     CHECK(st.control_passed == 1);
 
+    DeviceConfig tighter = bigger;
+    tighter.ringBlocks = 1.0;
+    CHECK(s.reconfigure(tighter) == ReconfigureResult::Applied);
+    s.latencyStatus(st);
+    CHECK(st.control_passed == 1);
+
     DeviceConfig other = bigger;
     other.inputId = "other";
     CHECK(s.reconfigure(other) == ReconfigureResult::Applied);

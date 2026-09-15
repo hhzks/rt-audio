@@ -785,8 +785,8 @@ fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let pm = if theme.rich { "±" } else { "+" };
     let with_unaccounted = width >= 66;
     let mut head = format!(
-        "  {:<22}{:<12}{:>7}{:>6}",
-        "config", "measured", "driver", "chain"
+        "  {:<17}{:>5}  {:<10}{:>7}{:>6}",
+        "config", "ring", "measured", "buffer", "chain"
     );
     if with_unaccounted {
         head += &format!("{:>8}", "unacc.");
@@ -803,8 +803,9 @@ fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
             .chain_ms
             .map_or_else(|| "n/a".to_owned(), |c| format!("{c:.2}"));
         let mut line = format!(
-            "  {:<22}{:>7.2}{pm}{:<4.2}{:>7.2}{:>6}",
-            fit(&r.label, 22, ell),
+            "  {:<17}{:>5}{:>7.2}{pm}{:<4.2}{:>7.2}{:>6}",
+            fit(&r.label, 17, ell),
+            r.ring_blocks,
             r.measured_ms,
             r.spread_ms,
             r.computed_ms,
@@ -1181,6 +1182,10 @@ mod tests {
         assert!(has(&r, "mode    ◂ shared ▸"));
         assert!(has(&r, "◂ 128 fr · 2.67 ms ▸   the driver can round it"));
         assert!(has(&r, "48 kHz   set by the device mix format"));
+        assert!(has(
+            &r,
+            "ring    ◂ 2 blocks ▸   lower: less delay, more risk"
+        ));
         assert!(has(&r, "now  Null · 48 kHz · 128 fr"));
         assert!(r[23].contains("R rescan"), "{}", r[23]);
     }
@@ -1293,6 +1298,7 @@ mod tests {
     fn latency_row(label: &str, chain: Option<f64>, unstable: bool) -> LatencyRow {
         LatencyRow {
             label: label.into(),
+            ring_blocks: 2.0,
             measured_ms: 21.89,
             spread_ms: 0.03,
             computed_ms: 6.33,
@@ -1308,16 +1314,19 @@ mod tests {
         let mut app = latency_app(&mut e);
         app.latency.as_mut().unwrap().status.control_passed = true;
         app.latency_rows
-            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
-        app.latency_rows
-            .push(latency_row("shared 1056 fr 48 kHz", None, true));
+            .push(latency_row("excl 144/48k", Some(0.41), false));
+        let mut tight = latency_row("shared 1056/48k", None, true);
+        tight.ring_blocks = 1.25;
+        app.latency_rows.push(tight);
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(has(&r, "LATENCY") && !has(&r, "CHAIN"));
         assert!(r[0].contains("■ SILENT"), "{}", r[0]);
         assert!(has(&r, "pair     synthetic tone → discard"));
         assert!(has(&r, "control  passed"));
         assert!(has(&r, "sweep    −6 dBFS · 5 repeats"));
-        assert!(has(&r, "excl 144 fr 48 kHz") && has(&r, "21.89±0.03"));
+        assert!(has(&r, "ring  measured   buffer chain"));
+        assert!(has(&r, "excl 144/48k") && has(&r, "2  21.89±0.03   6.33  0.41"));
+        assert!(has(&r, "shared 1056/48k   1.25  21.89±0.03"));
         assert!(has(&r, "n/a UNSTABLE"));
         assert!(!has(&r, "unacc."));
         assert!(r[23].contains("c control"), "{}", r[23]);
@@ -1329,7 +1338,7 @@ mod tests {
         let mut e = FakeEngine::rig();
         let mut app = latency_app(&mut e);
         app.latency_rows
-            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
+            .push(latency_row("excl 144/48k", Some(0.41), false));
         let r = rows(&app, &Theme::new(false, ColorMode::None), 80, 24);
         for line in &r {
             for c in line.chars() {
@@ -1378,7 +1387,7 @@ mod tests {
         let mut e = FakeEngine::rig();
         let mut app = latency_app(&mut e);
         app.latency_rows
-            .push(latency_row("excl 144 fr 48 kHz", Some(0.41), false));
+            .push(latency_row("excl 144/48k", Some(0.41), false));
         let t = Theme::new(true, ColorMode::None);
         let r100 = rows(&app, &t, 100, 30);
         assert!(has(&r100, "unacc.") && has(&r100, "15.56"));

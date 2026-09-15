@@ -25,6 +25,14 @@ struct DeviceInfo {
     bool        isDefaultOutput   = false;
 };
 
+inline constexpr double kMinRingBlocks     = 1.0;
+inline constexpr double kMaxRingBlocks     = 2.0;
+inline constexpr double kDefaultRingBlocks = 2.0;
+
+constexpr bool validRingBlocks(double blocks) noexcept {
+    return blocks >= kMinRingBlocks && blocks <= kMaxRingBlocks;
+}
+
 struct DeviceConfig {
     std::string inputId;      // empty = system default
     std::string outputId;     // empty = system default
@@ -32,6 +40,7 @@ struct DeviceConfig {
     FrameCount  blockFrames   = 0;      // 0 = ask the driver for its minimum
     int         numChannels   = 2;      // what the ENGINE runs at
     bool        exclusiveMode = false;  // WASAPI exclusive; ignored elsewhere
+    double      ringBlocks    = kDefaultRingBlocks;  // capture ring target, in blocks; Null ignores it
 
     bool operator==(const DeviceConfig&) const = default;
 };
@@ -41,7 +50,7 @@ struct DeviceStatus {
     double     sampleRate  = 0.0;
     FrameCount blockFrames = 0;
     int        numChannels = 0;
-    double     estimatedRoundTripMs = 0.0; // driver's claim -- always optimistic
+    double     estimatedRoundTripMs = 0.0; // endpoint buffers + ring target + resampler; no USB, converters or phase gap
     std::string backendName;
     std::string inputName, outputName;
 

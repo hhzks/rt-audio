@@ -4,6 +4,7 @@
 #include "io/alsa/RtSchedScope.h"
 #include "io/alsa/AlsaError.h"
 #include "core/RingPush.h"
+#include "io/Buffering.h"
 
 #include <algorithm>
 #include <chrono>
@@ -105,6 +106,8 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
                                     std::to_string(config.numChannels) +
                                     " outside the supported 1.." +
                                     std::to_string(kMaxChannels) + " range");
+    if (!validRingBlocks(config.ringBlocks))
+        throw std::invalid_argument("AlsaDevice::open: ringBlocks outside 1.0..2.0");
     close();
 
     config_   = config;
@@ -139,7 +142,8 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     nominalRatio_ = 1.0;
     captureRing_.reset(maxBlock * engineCh * 4);
     resampler_.prepare(config_.numChannels, nominalRatio_);
-    drift_.prepare(captureRing_.capacity() / 2, 0.002);
+    ringTargetFrames_ = ringTargetFrames(static_cast<std::uint32_t>(period), config_.ringBlocks);
+    drift_.prepare(ringTargetFrames_ * engineCh, 0.002);
 
     engineIn_.assign(maxBlock * engineCh, 0.0f);
     engineOut_.assign(maxBlock * engineCh, 0.0f);
@@ -154,9 +158,10 @@ void AlsaDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     status_.backendName = "ALSA";
     status_.inputName   = config_.inputId.empty()  ? "default" : config_.inputId;
     status_.outputName  = config_.outputId.empty() ? "default" : config_.outputId;
-    status_.estimatedRoundTripMs =
-        1000.0 * static_cast<double>(capBuf + renBuf) / config_.sampleRate
-      + 1000.0 * AsyncResampler::latencyFrames() / config_.sampleRate;
+    status_.estimatedRoundTripMs = bufferedRoundTripMs(
+        static_cast<double>(capBuf), static_cast<double>(renBuf),
+        static_cast<double>(ringTargetFrames_), config_.sampleRate,
+        static_cast<double>(AsyncResampler::latencyFrames()), config_.sampleRate);
 
     ready_.store(true, std::memory_order_release);
 }

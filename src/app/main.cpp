@@ -36,6 +36,7 @@ void printUsage() {
         "  --in <id>              capture device id (default: system default)\n"
         "  --out <id>             render device id (default: system default)\n"
         "  --exclusive            WASAPI exclusive mode\n"
+        "  --ring <blocks>        capture ring margin, 1.0 to 2.0 (default: 2.0)\n"
         "  --drive <x>            distortion drive, 1.0 = clean (default: 1.0)\n"
         "  --mix <0..1>           distortion dry/wet (default: 0.0)\n"
         "  --gate <dB>            noise gate threshold (default: -45)\n"
@@ -62,12 +63,19 @@ int main(int argc, char** argv) {
         else if (arg == "--in")        config.inputId = next();
         else if (arg == "--out")       config.outputId = next();
         else if (arg == "--exclusive") config.exclusiveMode = true;
+        else if (arg == "--ring")      config.ringBlocks = std::stod(next());
         else if (arg == "--drive")     drive = std::stod(next());
         else if (arg == "--mix")       mix = std::stod(next());
         else if (arg == "--gate")      gateDb = std::stod(next());
         else if (arg == "--bypass")    bypass = true;
         else if (arg == "--help")      { printUsage(); return 0; }
         else { std::cerr << "unknown argument: " << arg << "\n"; printUsage(); return 1; }
+    }
+
+    if (!validRingBlocks(config.ringBlocks)) {
+        std::cerr << "error: ring margin must be 1.0 to 2.0 blocks, got " << config.ringBlocks << "\n";
+        printUsage();
+        return 1;
     }
 
     try {
@@ -112,7 +120,7 @@ int main(int argc, char** argv) {
                   << std::fixed << std::setprecision(2)
                   << 1000.0 * st.blockFrames / st.sampleRate << " ms)\n"
                   << "channels     : " << st.numChannels << "\n"
-                  << "driver RTT   : ~" << st.estimatedRoundTripMs << " ms"
+                  << "buffer RTT   : ~" << st.estimatedRoundTripMs << " ms"
                   << "  (optimistic -- measure with loopback_latency)\n"
                   << "chain latency: " << engine.chain().totalLatencyFrames() << " frames\n\n"
                   << "running. press Enter to stop.\n\n";

@@ -56,6 +56,9 @@ struct Args {
     /// WASAPI exclusive mode
     #[arg(long)]
     exclusive: bool,
+    /// capture ring margin in blocks, 1.0 to 2.0
+    #[arg(long, default_value_t = 2.0)]
+    ring: f64,
     /// UI frame rate
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(10..=60))]
     fps: u32,
@@ -104,6 +107,13 @@ pub extern "C" fn rt_tui_main() -> i32 {
 }
 
 fn run(args: &Args) -> i32 {
+    if !(1.0..=2.0).contains(&args.ring) {
+        eprintln!(
+            "rt-rig: invalid argument: ring margin must be 1.0 to 2.0 blocks, got {}",
+            args.ring
+        );
+        return 2;
+    }
     let options = OpenOptions {
         backend: args.backend.clone(),
         input: args.input.clone(),
@@ -111,6 +121,7 @@ fn run(args: &Args) -> i32 {
         rate: args.rate,
         block: args.block,
         exclusive: args.exclusive,
+        ring: args.ring,
     };
     // Open the device before the alternate screen, so a failure stays visible.
     let mut engine = match FfiEngine::open(&options) {

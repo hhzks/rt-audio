@@ -27,9 +27,4 @@ constexpr int wasapiCaptureReads(bool exclusive, bool captureEvent) noexcept {
     return captureEvent ? 1 : 0;
 }
 
-constexpr std::uint32_t wasapiRingTargetFrames(std::uint32_t captureBufferFrames,
-                                               std::uint32_t renderBufferFrames) noexcept {
-    return 2 * (captureBufferFrames > renderBufferFrames ? captureBufferFrames : renderBufferFrames);
-}
-
 } // namespace rt

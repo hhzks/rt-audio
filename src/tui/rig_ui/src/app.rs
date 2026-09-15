@@ -383,8 +383,8 @@ impl App {
         }
         let mut s = String::from("rt-rig latency results\n");
         s += &format!(
-            "{:<24} {:>11} {:>8} {:>11} {:>9}\n",
-            "config", "measured ms", "spread", "driver ms", "chain ms"
+            "{:<18} {:>5} {:>11} {:>8} {:>10} {:>9}\n",
+            "config", "ring", "measured ms", "spread", "buffer ms", "chain ms"
         );
         for r in &self.latency_rows {
             let chain = r
@@ -398,8 +398,8 @@ impl App {
                 ""
             };
             s += &format!(
-                "{:<24} {:>11.2} {:>8.2} {:>11.2} {:>9}{flag}\n",
-                r.label, r.measured_ms, r.spread_ms, r.computed_ms, chain
+                "{:<18} {:>5} {:>11.2} {:>8.2} {:>10.2} {:>9}{flag}\n",
+                r.label, r.ring_blocks, r.measured_ms, r.spread_ms, r.computed_ms, chain
             );
         }
         s.pop();
@@ -1141,7 +1141,7 @@ mod tests {
         app.poll_latency(&e).unwrap();
         app.poll_latency(&e).unwrap();
         assert_eq!(app.latency_rows.len(), 1);
-        assert_eq!(app.latency_rows[0].label, "null 128 fr 48 kHz");
+        assert_eq!(app.latency_rows[0].label, "null 128/48k");
     }
 
     #[test]
@@ -1196,7 +1196,8 @@ mod tests {
         let (_, mut app, _) = setup();
         assert_eq!(app.quit_table(), None);
         app.latency_rows.push(LatencyRow {
-            label: "excl 144 fr 48 kHz".into(),
+            label: "excl 144/48k".into(),
+            ring_blocks: 2.0,
             measured_ms: 21.89,
             spread_ms: 0.06,
             computed_ms: 6.33,
@@ -1205,7 +1206,8 @@ mod tests {
             clipped: false,
         });
         app.latency_rows.push(LatencyRow {
-            label: "shared 1056 fr 48 kHz".into(),
+            label: "shared 1056/48k".into(),
+            ring_blocks: 1.25,
             measured_ms: 131.23,
             spread_ms: 1.5,
             computed_ms: 44.33,
@@ -1217,8 +1219,10 @@ mod tests {
         let lines: Vec<&str> = table.lines().collect();
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], "rt-rig latency results");
-        assert!(lines[2].starts_with("excl 144 fr 48 kHz"));
+        assert!(lines[1].contains("ring") && lines[1].contains("buffer ms"));
+        assert!(lines[2].starts_with("excl 144/48k"));
         assert!(lines[2].contains("21.89") && lines[2].contains("0.41"));
-        assert!(lines[3].contains("n/a") && lines[3].ends_with("UNSTABLE"));
+        assert!(lines[3].contains(" 1.25 ") && lines[3].contains("n/a"));
+        assert!(lines[3].ends_with("UNSTABLE"));
     }
 }

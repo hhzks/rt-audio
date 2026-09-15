@@ -44,6 +44,7 @@ pub struct RtOpenConfig {
     pub sample_rate: f64,
     pub block_frames: i32,
     pub exclusive: u8,
+    pub ring_blocks: f64,
 }
 
 #[repr(C)]
@@ -114,6 +115,7 @@ pub struct RtConfigDesc {
     pub sample_rate: f64,
     pub block_frames: i32,
     pub exclusive: u8,
+    pub ring_blocks: f64,
 }
 
 #[repr(C)]
@@ -227,7 +229,7 @@ macro_rules! layout {
 // Same order as cLayout() in tests/test_ffi_layout.cpp.
 pub fn layout_values() -> Vec<u64> {
     let mut v = Vec::new();
-    layout!(v, RtOpenConfig; backend, input_id, output_id, sample_rate, block_frames, exclusive);
+    layout!(v, RtOpenConfig; backend, input_id, output_id, sample_rate, block_frames, exclusive, ring_blocks);
     layout!(v, RtParamDesc; id, name, unit, min, max, def, taper, flags);
     layout!(v, RtStripDesc; name, param_count, latency_frames);
     layout!(v, RtDeviceDesc; backend, input, output, sample_rate, claimed_rtt_ms, block_frames, channels);
@@ -236,7 +238,7 @@ pub fn layout_values() -> Vec<u64> {
         params, channels, running, device_error);
     layout!(v, RtDeviceInfo; id, name, max_input_channels, max_output_channels,
         default_sample_rate, is_default_input, is_default_output);
-    layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive);
+    layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive, ring_blocks);
     layout!(v, RtLatencySettings; repeats, amplitude);
     layout!(v, RtLatencyRepeat; lag_ms, correlation, psr, valid, polarity_inverted);
     layout!(v, RtLatencyStatus; state, kind, phase, repeat, repeats, latency_mode,

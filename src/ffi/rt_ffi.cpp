@@ -5,6 +5,7 @@
 #include "engine/RtHistogram.h"
 
 #include <exception>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,7 +53,8 @@ std::optional<rt::Backend> parseBackend(rt_session* s, const char* name) {
     return b;
 }
 
-// Returns RT_OK, or RT_E_ARG with lastError set when an id cannot round-trip.
+// Returns RT_OK, or RT_E_ARG with lastError set when an id cannot round-trip or the ring
+// margin is out of range.
 int32_t toDeviceConfig(rt_session* s, const rt_open_config& cfg, rt::DeviceConfig& dc) {
     for (const char* id : {cfg.input_id, cfg.output_id}) {
         if (id != nullptr && std::string_view(id).size() >= RT_ID_BYTES) {
@@ -66,6 +68,11 @@ int32_t toDeviceConfig(rt_session* s, const rt_open_config& cfg, rt::DeviceConfi
     dc.sampleRate    = cfg.sample_rate > 0.0 ? cfg.sample_rate : 48000.0;
     dc.blockFrames   = cfg.block_frames;
     dc.exclusiveMode = cfg.exclusive != 0;
+    dc.ringBlocks    = cfg.ring_blocks == 0.0 ? rt::kDefaultRingBlocks : cfg.ring_blocks;
+    if (!rt::validRingBlocks(dc.ringBlocks)) {
+        s->lastError = std::format("ring margin must be 1.0 to 2.0 blocks, got {}", cfg.ring_blocks);
+        return RT_E_ARG;
+    }
     return RT_OK;
 }
 
@@ -207,6 +214,7 @@ int32_t rt_session_config(const rt_session* s, rt_config_desc* out) {
         out->sample_rate  = c.sampleRate;
         out->block_frames = static_cast<int32_t>(c.blockFrames);
         out->exclusive    = static_cast<uint8_t>(c.exclusiveMode);
+        out->ring_blocks  = c.ringBlocks;
     });
 }
 

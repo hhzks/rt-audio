@@ -22,6 +22,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_open_config, sample_rate);
     FIELD(rt_open_config, block_frames);
     FIELD(rt_open_config, exclusive);
+    FIELD(rt_open_config, ring_blocks);
 
     LAYOUT(rt_param_desc);
     FIELD(rt_param_desc, id);
@@ -80,6 +81,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_config_desc, sample_rate);
     FIELD(rt_config_desc, block_frames);
     FIELD(rt_config_desc, exclusive);
+    FIELD(rt_config_desc, ring_blocks);
 
     LAYOUT(rt_latency_settings);
     FIELD(rt_latency_settings, repeats);

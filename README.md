@@ -70,6 +70,10 @@ keys; `q q` quits.
   measure (`Enter`, with the headphones against the microphone). Each measurement adds a row with
   its config, so you can compare block sizes and modes after a change with `o`. When you quit,
   `rt_rig` prints the table.
+- The `ring` field in the `o` panel, or `--ring`, sets the capture ring margin, from 1 to 2
+  blocks (default 2). A lower value cuts the round trip by up to one block, but it gives less
+  protection against underruns. Measure each value with `m`, and look at the underrun count in
+  the header.
 
 ## License
 
