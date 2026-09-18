@@ -200,6 +200,21 @@ TEST_CASE("config reports the requested values", "[ffi]") {
     rt_session_destroy(s);
 }
 
+TEST_CASE("the backend caps come from the session backend", "[ffi]") {
+    rt_backend_caps caps{};
+    CHECK(rt_session_caps(nullptr, &caps) == RT_E_ARG);
+    rt_session* s = rt_session_create();
+    CHECK(rt_session_caps(s, nullptr) == RT_E_ARG);
+    CHECK(rt_session_caps(s, &caps) == RT_E_STATE);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    REQUIRE(rt_session_caps(s, &caps) == RT_OK);
+    CHECK(caps.flags == 0u);
+    CHECK(std::string(caps.display_name) == "NULL");
+    CHECK(caps.notice[0] == '\0');
+    rt_session_destroy(s);
+}
+
 TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     rt_session* s = rt_session_create();
     rt_open_config cfg = nullConfig();

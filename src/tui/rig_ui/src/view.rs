@@ -7,7 +7,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
-use crate::ASIO_NOTICE;
 use crate::app::{App, Mode, Row};
 use crate::latency::{Step, ring_cell};
 use crate::meters::{FLOOR_DB, Meter};
@@ -673,12 +672,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let x0 = inner.x;
     let mut y = inner.y + 1;
 
-    let name = if p.is_asio() {
-        "ASIO\u{ae}".to_owned()
-    } else {
-        p.edited.backend.to_uppercase()
-    };
-    let backend = format!("  {:<8}{}", "backend", name);
+    let backend = format!("  {:<8}{}", "backend", p.caps.display_name);
     put(buf, x0, y, &backend, normal);
     y += 1;
 
@@ -755,7 +749,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         }
     };
     let bottom = inner.y + inner.height;
-    let notice_rows: u16 = if p.is_asio() { 2 } else { 0 };
+    let notice_rows: u16 = if p.caps.notice.is_empty() { 0 } else { 2 };
     let lines = usize::from(bottom.saturating_sub(y).saturating_sub(notice_rows)).min(3);
     for (i, line) in wrap(&status, width.saturating_sub(2), lines, ell)
         .iter()
@@ -763,8 +757,8 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     {
         put(buf, x0 + 2, y + i as u16, line, theme.style(role));
     }
-    if p.is_asio() {
-        for (i, line) in wrap_words(ASIO_NOTICE, width.saturating_sub(2), 2, ell)
+    if !p.caps.notice.is_empty() {
+        for (i, line) in wrap_words(&p.caps.notice, width.saturating_sub(2), 2, ell)
             .iter()
             .enumerate()
         {
@@ -944,7 +938,7 @@ fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     }
     let g = &theme.glyphs;
     let text = if app.mode() == Mode::Picker {
-        let panel = if app.picker.as_ref().is_some_and(|p| p.is_asio()) {
+        let panel = if app.picker.as_ref().is_some_and(|p| p.caps.driver_panel) {
             "  p panel"
         } else {
             ""
@@ -1346,7 +1340,7 @@ mod tests {
     fn latency_row(label: &str, chain: Option<f64>, unstable: bool) -> LatencyRow {
         LatencyRow {
             label: label.into(),
-            ring_blocks: 2.0,
+            ring_blocks: Some(2.0),
             measured_ms: 21.89,
             spread_ms: 0.03,
             computed_ms: 6.33,
@@ -1364,7 +1358,7 @@ mod tests {
         app.latency_rows
             .push(latency_row("excl 144/48k", Some(0.41), false));
         let mut tight = latency_row("shared 1056/48k", None, true);
-        tight.ring_blocks = 1.25;
+        tight.ring_blocks = Some(1.25);
         app.latency_rows.push(tight);
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(has(&r, "LATENCY") && !has(&r, "CHAIN"));

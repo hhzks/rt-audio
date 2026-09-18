@@ -1,15 +1,11 @@
-use crate::model::{Config, Device, LatencyKind, LatencyState, LatencyStatus};
+use crate::model::{Caps, Config, Device, LatencyKind, LatencyState, LatencyStatus};
 
 pub const LEVELS_DB: [f64; 9] = [-24.0, -21.0, -18.0, -15.0, -12.0, -9.0, -6.0, -3.0, 0.0];
 const DEFAULT_LEVEL: usize = 6;
 pub const UNSTABLE_MS: f64 = 1.0;
 
-pub fn ring_cell(ring_blocks: f64) -> String {
-    if ring_blocks == 0.0 {
-        "—".to_owned()
-    } else {
-        format!("{ring_blocks}")
-    }
+pub fn ring_cell(ring_blocks: Option<f64>) -> String {
+    ring_blocks.map_or_else(|| "—".to_owned(), |r| format!("{r}"))
 }
 
 fn short_rate(rate: f64) -> String {
@@ -52,7 +48,7 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LatencyRow {
     pub label: String,
-    pub ring_blocks: f64,
+    pub ring_blocks: Option<f64>,
     pub measured_ms: f64,
     pub spread_ms: f64,
     pub computed_ms: f64,
@@ -62,11 +58,11 @@ pub struct LatencyRow {
 }
 
 impl LatencyRow {
-    pub fn new(config: &Config, device: &Device, status: &LatencyStatus) -> Self {
-        let mode = match config.backend.as_str() {
-            "wasapi" if config.exclusive => "excl",
-            "wasapi" => "shared",
-            other => other,
+    pub fn new(config: &Config, caps: &Caps, device: &Device, status: &LatencyStatus) -> Self {
+        let mode = if caps.exclusive_mode {
+            if config.exclusive { "excl" } else { "shared" }
+        } else {
+            config.backend.as_str()
         };
         LatencyRow {
             label: format!(
@@ -74,11 +70,7 @@ impl LatencyRow {
                 device.block_frames,
                 short_rate(device.sample_rate)
             ),
-            ring_blocks: if config.backend == "asio" {
-                0.0
-            } else {
-                config.ring_blocks
-            },
+            ring_blocks: caps.ring.then_some(config.ring_blocks),
             measured_ms: status.measured_ms,
             spread_ms: status.spread_ms,
             computed_ms: status.computed_ms,
@@ -98,7 +90,7 @@ pub struct LatencyScreen {
     pub level: usize,
     pub status: LatencyStatus,
     pub message: Option<String>,
-    started_with: Option<(Config, Device)>,
+    started_with: Option<(Config, Caps, Device)>,
 }
 
 impl Default for LatencyScreen {
@@ -175,8 +167,8 @@ impl LatencyScreen {
         Action::None
     }
 
-    pub fn started(&mut self, config: Config, device: Device) {
-        self.started_with = Some((config, device));
+    pub fn started(&mut self, config: Config, caps: Caps, device: Device) {
+        self.started_with = Some((config, caps, device));
         self.step = Step::Running;
         self.message = None;
     }
@@ -187,7 +179,7 @@ impl LatencyScreen {
             self.step = Step::Home;
             let started = self.started_with.take();
             if status.state == LatencyState::Done && status.kind == LatencyKind::Measure {
-                row = started.map(|(c, d)| LatencyRow::new(&c, &d, &status));
+                row = started.map(|(c, k, d)| LatencyRow::new(&c, &k, &d, &status));
             }
             self.message = match status.state {
                 LatencyState::Cancelled => Some("cancelled".into()),
@@ -279,7 +271,11 @@ mod tests {
         assert_eq!(s.key(Key::Enter, true), Action::Leave);
 
         let mut s = LatencyScreen::new();
-        s.started(wasapi(false), device(128, 48000.0));
+        s.started(
+            wasapi(false),
+            Caps::fake_for("wasapi"),
+            device(128, 48000.0),
+        );
         assert_eq!(s.key(Key::Esc, true), Action::Cancel);
         assert_eq!(s.key(Key::Control, true), Action::None);
         assert_eq!(s.key(Key::Devices, true), Action::None);
@@ -305,7 +301,7 @@ mod tests {
     #[test]
     fn a_done_measure_gives_exactly_one_row() {
         let mut s = LatencyScreen::new();
-        s.started(wasapi(true), device(144, 48000.0));
+        s.started(wasapi(true), Caps::fake_for("wasapi"), device(144, 48000.0));
         let running = LatencyStatus {
             state: LatencyState::Running,
             kind: LatencyKind::Measure,
@@ -314,7 +310,7 @@ mod tests {
         assert!(s.ingest(running).is_none());
         let row = s.ingest(done_measure()).expect("one row");
         assert_eq!(row.label, "excl 144/48k");
-        assert_eq!(row.ring_blocks, 2.0);
+        assert_eq!(row.ring_blocks, Some(2.0));
         assert_eq!(row.chain_ms, Some(0.41));
         assert!(!row.unstable);
         assert!((row.unaccounted_ms() - 15.56).abs() < 1e-9);
@@ -325,7 +321,11 @@ mod tests {
     #[test]
     fn a_control_gives_no_row_and_failures_give_the_message() {
         let mut s = LatencyScreen::new();
-        s.started(wasapi(false), device(1056, 48000.0));
+        s.started(
+            wasapi(false),
+            Caps::fake_for("wasapi"),
+            device(1056, 48000.0),
+        );
         let failed = LatencyStatus {
             state: LatencyState::Failed,
             kind: LatencyKind::Control,
@@ -335,7 +335,11 @@ mod tests {
         assert!(s.ingest(failed).is_none());
         assert_eq!(s.message.as_deref(), Some("detected a peak at 4.02 ms"));
 
-        s.started(wasapi(false), device(1056, 48000.0));
+        s.started(
+            wasapi(false),
+            Caps::fake_for("wasapi"),
+            device(1056, 48000.0),
+        );
         let passed = LatencyStatus {
             state: LatencyState::Done,
             kind: LatencyKind::Control,
@@ -344,7 +348,11 @@ mod tests {
         };
         assert!(s.ingest(passed).is_none());
 
-        s.started(wasapi(false), device(1056, 48000.0));
+        s.started(
+            wasapi(false),
+            Caps::fake_for("wasapi"),
+            device(1056, 48000.0),
+        );
         s.ingest(LatencyStatus {
             state: LatencyState::Cancelled,
             ..LatencyStatus::default()
@@ -355,7 +363,14 @@ mod tests {
 
     #[test]
     fn row_labels_and_flags() {
-        let shared = LatencyRow::new(&wasapi(false), &device(1056, 48000.0), &done_measure());
+        let wasapi_caps = Caps::fake_for("wasapi");
+        let alsa_caps = Caps::fake_for("alsa");
+        let shared = LatencyRow::new(
+            &wasapi(false),
+            &wasapi_caps,
+            &device(1056, 48000.0),
+            &done_measure(),
+        );
         assert_eq!(shared.label, "shared 1056/48k");
 
         let alsa = Config {
@@ -367,7 +382,7 @@ mod tests {
             clipped: true,
             ..done_measure()
         };
-        let row = LatencyRow::new(&alsa, &device(256, 44100.0), &noisy);
+        let row = LatencyRow::new(&alsa, &alsa_caps, &device(256, 44100.0), &noisy);
         assert_eq!(row.label, "alsa 256/44.1k");
         assert!(row.unstable);
         assert!(row.clipped);
@@ -377,7 +392,7 @@ mod tests {
             ..done_measure()
         };
         assert_eq!(
-            LatencyRow::new(&alsa, &device(256, 48000.0), &no_chain).chain_ms,
+            LatencyRow::new(&alsa, &alsa_caps, &device(256, 48000.0), &no_chain).chain_ms,
             None
         );
 
@@ -385,19 +400,19 @@ mod tests {
             ring_blocks: 1.25,
             ..wasapi(true)
         };
-        let row = LatencyRow::new(&tight, &device(144, 48000.0), &done_measure());
-        assert_eq!(row.ring_blocks, 1.25);
+        let row = LatencyRow::new(&tight, &wasapi_caps, &device(144, 48000.0), &done_measure());
+        assert_eq!(row.ring_blocks, Some(1.25));
     }
 
     #[test]
     fn the_ring_cell_is_a_dash_without_a_ring() {
-        assert_eq!(ring_cell(0.0), "—");
-        assert_eq!(ring_cell(1.25), "1.25");
-        assert_eq!(ring_cell(2.0), "2");
+        assert_eq!(ring_cell(None), "—");
+        assert_eq!(ring_cell(Some(1.25)), "1.25");
+        assert_eq!(ring_cell(Some(2.0)), "2");
     }
 
     #[test]
-    fn an_asio_row_has_no_ring() {
+    fn only_backends_with_a_ring_have_a_ring_value() {
         let mut config = Config {
             backend: "asio".into(),
             input: String::new(),
@@ -416,10 +431,11 @@ mod tests {
             channels: 2,
             claimed_rtt_ms: 6.0,
         };
-        let row = LatencyRow::new(&config, &device, &LatencyStatus::default());
-        assert_eq!(row.ring_blocks, 0.0);
-        config.backend = "wasapi".into();
-        let row = LatencyRow::new(&config, &device, &LatencyStatus::default());
-        assert_eq!(row.ring_blocks, 2.0);
+        for (backend, want) in [("asio", None), ("null", None), ("wasapi", Some(2.0))] {
+            config.backend = backend.into();
+            let caps = Caps::fake_for(backend);
+            let row = LatencyRow::new(&config, &caps, &device, &LatencyStatus::default());
+            assert_eq!(row.ring_blocks, want, "{backend}");
+        }
     }
 }

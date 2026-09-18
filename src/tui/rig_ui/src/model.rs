@@ -80,6 +80,48 @@ pub struct DeviceEntry {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct Caps {
+    pub ring: bool,
+    pub one_driver: bool,
+    pub driver_panel: bool,
+    pub exclusive_mode: bool,
+    pub rate_from_device: bool,
+    pub block_zero_preferred: bool,
+    pub block_rounded: bool,
+    pub display_name: String,
+    pub notice: String,
+}
+
+impl Caps {
+    /// A copy of `backendCaps` in `DeviceFactory.cpp`, for `FakeEngine` and tests.
+    pub fn fake_for(backend: &str) -> Caps {
+        let mut c = Caps {
+            display_name: backend.to_uppercase(),
+            ..Caps::default()
+        };
+        match backend {
+            "wasapi" => {
+                c.ring = true;
+                c.exclusive_mode = true;
+                c.rate_from_device = true;
+                c.block_rounded = true;
+            }
+            "asio" => {
+                c.one_driver = true;
+                c.driver_panel = true;
+                c.block_zero_preferred = true;
+                c.block_rounded = true;
+                c.display_name = "ASIO\u{ae}".into();
+                c.notice = crate::ASIO_NOTICE.into();
+            }
+            "alsa" => c.ring = true,
+            _ => {}
+        }
+        c
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Config {
     pub backend: String,
     pub input: String,
@@ -268,6 +310,7 @@ pub trait Engine {
     fn bucket_upper_ns(&self, bucket: usize) -> u64;
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
+    fn caps(&self) -> Caps;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
     fn control_panel(&mut self) -> Result<PanelOutcome, EngineError>;
     fn latency_enter(&mut self) -> Result<(), EngineError>;
@@ -521,6 +564,10 @@ impl Engine for FakeEngine {
         &self.config
     }
 
+    fn caps(&self) -> Caps {
+        Caps::fake_for(&self.config.backend)
+    }
+
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
         self.reconfigures.push(next.clone());
         if !self.fails(next) {
@@ -541,7 +588,7 @@ impl Engine for FakeEngine {
     }
 
     fn control_panel(&mut self) -> Result<PanelOutcome, EngineError> {
-        if self.config.backend != "asio" {
+        if !self.caps().driver_panel {
             return Err(EngineError::State(
                 "this backend has no driver panel".into(),
             ));

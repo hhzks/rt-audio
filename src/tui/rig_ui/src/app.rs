@@ -511,7 +511,7 @@ impl App {
             .map_or_else(|| engine.config().clone(), |(c, _)| c.clone());
         let devices = engine.devices().map_err(|e| e.to_string());
         self.help = false;
-        self.picker = Some(Picker::new(config, devices));
+        self.picker = Some(Picker::new(config, engine.caps(), devices));
     }
 
     fn picker_key(&mut self, msg: Msg, now: Instant) {
@@ -588,9 +588,10 @@ impl App {
                 match engine.latency_start(kind, settings) {
                     Ok(()) => {
                         let config = engine.config().clone();
+                        let caps = engine.caps();
                         let device = self.device.clone();
                         if let Some(screen) = self.latency.as_mut() {
-                            screen.started(config, device);
+                            screen.started(config, caps, device);
                         }
                         Ok(())
                     }
@@ -1264,7 +1265,7 @@ mod tests {
         assert_eq!(app.quit_table(), None);
         app.latency_rows.push(LatencyRow {
             label: "excl 144/48k".into(),
-            ring_blocks: 2.0,
+            ring_blocks: Some(2.0),
             measured_ms: 21.89,
             spread_ms: 0.06,
             computed_ms: 6.33,
@@ -1274,7 +1275,7 @@ mod tests {
         });
         app.latency_rows.push(LatencyRow {
             label: "shared 1056/48k".into(),
-            ring_blocks: 1.25,
+            ring_blocks: Some(1.25),
             measured_ms: 131.23,
             spread_ms: 1.5,
             computed_ms: 44.33,
@@ -1421,7 +1422,7 @@ mod tests {
         let (_, mut app, _) = setup();
         app.latency_rows.push(LatencyRow {
             label: "asio 64/48k".into(),
-            ring_blocks: 0.0,
+            ring_blocks: None,
             measured_ms: 6.51,
             spread_ms: 0.02,
             computed_ms: 6.25,

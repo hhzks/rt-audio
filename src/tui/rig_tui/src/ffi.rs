@@ -23,6 +23,15 @@ pub const RT_RECONF_STOPPED: i32 = 2;
 pub const RT_PANEL_MODAL: i32 = 1;
 pub const RT_PANEL_ALREADY_OPEN: i32 = 2;
 pub const RT_PANEL_NONE: i32 = 3;
+
+pub const RT_CAP_RING: u32 = 1;
+pub const RT_CAP_ONE_DRIVER: u32 = 2;
+pub const RT_CAP_DRIVER_PANEL: u32 = 4;
+pub const RT_CAP_EXCLUSIVE_MODE: u32 = 8;
+pub const RT_CAP_RATE_FROM_DEVICE: u32 = 16;
+pub const RT_CAP_BLOCK_ZERO_PREFERRED: u32 = 32;
+pub const RT_CAP_BLOCK_ROUNDED: u32 = 64;
+
 pub const RT_ID_BYTES: usize = 256;
 pub const RT_NAME_BYTES: usize = 128;
 
@@ -139,6 +148,13 @@ pub struct RtLatencyRepeat {
 }
 
 #[repr(C)]
+pub struct RtBackendCaps {
+    pub flags: u32,
+    pub display_name: [c_char; 16],
+    pub notice: [c_char; 128],
+}
+
+#[repr(C)]
 pub struct RtLatencyStatus {
     pub state: i32,
     pub kind: i32,
@@ -178,6 +194,7 @@ zeroed_ctor!(
     RtSnapshot,
     RtDeviceInfo,
     RtConfigDesc,
+    RtBackendCaps,
     RtLatencyStatus
 );
 
@@ -205,6 +222,7 @@ unsafe extern "C" {
         total: *mut i32,
     ) -> i32;
     pub fn rt_session_config(s: *const RtSession, out: *mut RtConfigDesc) -> i32;
+    pub fn rt_session_caps(s: *const RtSession, out: *mut RtBackendCaps) -> i32;
     pub fn rt_session_reconfigure(
         s: *mut RtSession,
         cfg: *const RtOpenConfig,
@@ -250,5 +268,6 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtLatencyStatus; state, kind, phase, repeat, repeats, latency_mode,
         control_passed, chain_valid, clipped, kept, discarded, measured_ms, spread_ms,
         computed_ms, chain_measured_ms, chain_reported_frames, direct, message);
+    layout!(v, RtBackendCaps; flags, display_name, notice);
     v
 }

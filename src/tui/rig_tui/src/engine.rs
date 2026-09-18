@@ -2,14 +2,14 @@ use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use rig_ui::model::{
-    Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, LatencyKind,
+    Caps, Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, LatencyKind,
     LatencyPhase, LatencyRepeat, LatencySettings, LatencyState, LatencyStatus, Outcome,
     PanelOutcome, Param, Snapshot, Strip, Taper,
 };
 
 use crate::ffi::{
-    self, RtConfigDesc, RtDeviceDesc, RtDeviceInfo, RtLatencySettings, RtLatencyStatus,
-    RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc,
+    self, RtBackendCaps, RtConfigDesc, RtDeviceDesc, RtDeviceInfo, RtLatencySettings,
+    RtLatencyStatus, RtOpenConfig, RtParamDesc, RtSession, RtSnapshot, RtStripDesc,
 };
 
 const _: () = assert!(HIST_BUCKETS == ffi::RT_HIST_BUCKETS);
@@ -30,6 +30,7 @@ pub struct FfiEngine {
     strips: Vec<Strip>,
     device: Device,
     config: Config,
+    caps: Caps,
 }
 
 fn from_c_array(arr: &[c_char]) -> String {
@@ -141,6 +142,7 @@ impl FfiEngine {
             strips: Vec::new(),
             device: Device::default(),
             config: Config::default(),
+            caps: Caps::default(),
         };
 
         let backend = c_string(o.backend.as_deref())?;
@@ -159,6 +161,7 @@ impl FfiEngine {
         e.check(unsafe { ffi::rt_session_open(e.s, &cfg) })?;
         e.device = e.read_device()?;
         e.config = e.read_config()?;
+        e.caps = e.read_caps()?;
         e.strips = e.read_strips()?;
         Ok(e)
     }
@@ -215,6 +218,24 @@ impl FfiEngine {
             block: c.block_frames,
             exclusive: c.exclusive != 0,
             ring_blocks: c.ring_blocks,
+        })
+    }
+
+    fn read_caps(&self) -> Result<Caps, EngineError> {
+        let mut c = RtBackendCaps::zeroed();
+        // SAFETY: `c` is a valid, writable rt_backend_caps.
+        self.check(unsafe { ffi::rt_session_caps(self.s, &mut c) })?;
+        let has = |bit: u32| c.flags & bit != 0;
+        Ok(Caps {
+            ring: has(ffi::RT_CAP_RING),
+            one_driver: has(ffi::RT_CAP_ONE_DRIVER),
+            driver_panel: has(ffi::RT_CAP_DRIVER_PANEL),
+            exclusive_mode: has(ffi::RT_CAP_EXCLUSIVE_MODE),
+            rate_from_device: has(ffi::RT_CAP_RATE_FROM_DEVICE),
+            block_zero_preferred: has(ffi::RT_CAP_BLOCK_ZERO_PREFERRED),
+            block_rounded: has(ffi::RT_CAP_BLOCK_ROUNDED),
+            display_name: from_c_array(&c.display_name),
+            notice: from_c_array(&c.notice),
         })
     }
 
@@ -344,6 +365,10 @@ impl Engine for FfiEngine {
 
     fn config(&self) -> &Config {
         &self.config
+    }
+
+    fn caps(&self) -> Caps {
+        self.caps.clone()
     }
 
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
