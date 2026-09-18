@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <thread>
 
 namespace rt {
@@ -45,6 +46,36 @@ Attempt runOne(LoopbackProbe& probe, const PhaseConfig& cfg, const PhaseHooks& h
     }
     a.result = analyzeLatency(probe.reference(), probe.captured(), cfg.maxLagFrames, cfg.sampleRate);
     return a;
+}
+
+void keep(PhaseResult& phase, const Attempt& attempt, int repeat, const PhaseHooks& hooks) {
+    if (attempt.clipped) {
+        phase.anyClipped = true;
+        if (hooks.progress) hooks.progress(PhaseEvent::Clipped, repeat, 0);
+    }
+    phase.kept.push_back(attempt.result);
+}
+
+// Sweeps until two consecutive clean lags agree; the confirming sweep becomes repeat 1.
+void warmUp(LoopbackProbe& probe, const PhaseConfig& cfg, const PhaseHooks& hooks,
+            PhaseResult& phase) {
+    std::optional<double> previous;
+    for (int sweep = 1; sweep <= cfg.maxWarmup; ++sweep) {
+        if (hooks.progress) hooks.progress(PhaseEvent::Warmup, sweep, 0);
+        const Attempt a = runOne(probe, cfg, hooks);
+        if (a.xrun || !a.result.valid) {
+            previous.reset();
+            continue;
+        }
+        if (previous && std::fabs(a.result.lagMs - *previous) <= cfg.settleMs) {
+            phase.warmup = sweep - 1;
+            keep(phase, a, 1, hooks);
+            return;
+        }
+        previous = a.result.lagMs;
+    }
+    phase.warmup  = cfg.maxWarmup;
+    phase.settled = false;
 }
 
 } // namespace
@@ -92,7 +123,8 @@ const LatencyResult* PhaseResult::representative() const {
 PhaseResult runPhase(LoopbackProbe& probe, const PhaseConfig& cfg, const PhaseHooks& hooks) {
     PhaseResult phase;
     phase.requested = cfg.repeats;
-    for (int i = 0; i < cfg.repeats; ++i) {
+    if (cfg.maxWarmup > 0 && cfg.repeats > 0) warmUp(probe, cfg, hooks, phase);
+    for (int i = static_cast<int>(phase.kept.size()); i < cfg.repeats; ++i) {
         const int repeat = i + 1;
         Attempt attempt;
         for (int retry = 0;; ++retry) {
@@ -105,11 +137,7 @@ PhaseResult runPhase(LoopbackProbe& probe, const PhaseConfig& cfg, const PhaseHo
             if (hooks.progress) hooks.progress(PhaseEvent::Discarded, repeat, cfg.maxRetries);
             continue;
         }
-        if (attempt.clipped) {
-            phase.anyClipped = true;
-            if (hooks.progress) hooks.progress(PhaseEvent::Clipped, repeat, 0);
-        }
-        phase.kept.push_back(attempt.result);
+        keep(phase, attempt, repeat, hooks);
     }
     return phase;
 }

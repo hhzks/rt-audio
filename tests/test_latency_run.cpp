@@ -65,6 +65,59 @@ private:
     std::thread       thread_;   // last, so the members above exist before it starts
 };
 
+// Like ProbeLoop, but the delay can change between sweeps. Delays must be >= 128 frames.
+class VariableLoop {
+public:
+    VariableLoop(LoopbackProbe& probe, int maxDelayFrames)
+        : probe_(probe), buf_(idx(maxDelayFrames + 128), 0.0f), thread_([this] { run(); }) {}
+    ~VariableLoop() {
+        stop_.store(true);
+        thread_.join();
+    }
+    VariableLoop(const VariableLoop&) = delete;
+    VariableLoop& operator=(const VariableLoop&) = delete;
+
+    void setDelay(int frames) { delay_.store(frames); }
+
+private:
+    void run() {
+        std::vector<float> in(128), out(128);
+        const std::size_t n = buf_.size();
+        std::size_t w = 0;
+        while (!stop_.load()) {
+            const std::size_t d = idx(delay_.load());
+            for (std::size_t i = 0; i < 128; ++i) in[i] = buf_[(w + i + n - d) % n];
+            probe_.process(in.data(), out.data(), 128);
+            for (std::size_t i = 0; i < 128; ++i) buf_[(w + i) % n] = out[i];
+            w = (w + 128) % n;
+            std::this_thread::yield();
+        }
+    }
+
+    LoopbackProbe&     probe_;
+    std::vector<float> buf_;
+    std::atomic<int>   delay_{128};
+    std::atomic<bool>  stop_{false};
+    std::thread        thread_;
+};
+
+// Sets the loop delay from `frames` before each sweep; the last value repeats.
+PhaseHooks delaySequence(VariableLoop& loop, std::vector<int> frames, int& sweeps) {
+    PhaseHooks hooks;
+    hooks.progress = [&loop, frames = std::move(frames), &sweeps](PhaseEvent e, int, int) {
+        if (e != PhaseEvent::Attempt && e != PhaseEvent::Warmup) return;
+        loop.setDelay(frames[std::min(idx(sweeps), frames.size() - 1)]);
+        ++sweeps;
+    };
+    return hooks;
+}
+
+PhaseConfig warmupConfig(int repeats, int maxWarmup) {
+    PhaseConfig c = phaseConfig(repeats);
+    c.maxWarmup = maxWarmup;
+    return c;
+}
+
 LatencyResult valid(double ms) {
     LatencyResult r;
     r.valid = true;
@@ -158,6 +211,86 @@ TEST_CASE("runPhase stops on cancel, device loss and timeout", "[engine]") {
     PhaseConfig slow = phaseConfig(1);
     slow.timeout = std::chrono::milliseconds(20);
     CHECK_THROWS_WITH(runPhase(probe, slow, PhaseHooks{}), ContainsSubstring("timed out"));
+}
+
+TEST_CASE("with warm-up off, each repeat is one sweep", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep());
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    const PhaseResult r = runPhase(probe, warmupConfig(3, 0), delaySequence(loop, {512}, sweeps));
+    CHECK(sweeps == 3);
+    CHECK(r.warmup == 0);
+    CHECK(r.kept.size() == 3);
+}
+
+TEST_CASE("a settled delay needs one warm-up sweep", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep());
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    const PhaseResult r = runPhase(probe, warmupConfig(3, 10), delaySequence(loop, {512}, sweeps));
+    CHECK(sweeps == 4);   // the second sweep confirms and counts as repeat 1
+    CHECK(r.warmup == 1);
+    CHECK(r.settled);
+    CHECK(r.kept.size() == 3);
+    CHECK_THAT(r.medianMs(), WithinAbs(512.0 / 48.0, 0.5 / 48.0));
+}
+
+TEST_CASE("warm-up continues until two sweeps agree", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep());
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    const PhaseResult r =
+        runPhase(probe, warmupConfig(3, 10), delaySequence(loop, {700, 600, 560}, sweeps));
+    CHECK(sweeps == 6);
+    CHECK(r.warmup == 3);
+    CHECK(r.settled);
+    REQUIRE(r.kept.size() == 3);
+    for (const LatencyResult& k : r.kept) CHECK_THAT(k.lagMs, WithinAbs(560.0 / 48.0, 0.5 / 48.0));
+}
+
+TEST_CASE("the warm-up limit leaves the phase unsettled and measures anyway", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep());
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    const PhaseResult r = runPhase(probe, warmupConfig(2, 3),
+                                   delaySequence(loop, {600, 700, 600, 700, 600, 700, 650}, sweeps));
+    CHECK(sweeps == 5);
+    CHECK(r.warmup == 3);
+    CHECK(!r.settled);
+    CHECK(r.kept.size() == 2);
+}
+
+TEST_CASE("a clipped sweep that ends the warm-up is reported", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep(1.0f));
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    const PhaseResult r = runPhase(probe, warmupConfig(1, 10), delaySequence(loop, {512}, sweeps));
+    CHECK(sweeps == 2);
+    CHECK(r.anyClipped);
+}
+
+TEST_CASE("an xrun during warm-up restarts the comparison", "[engine]") {
+    LoopbackProbe probe;
+    probe.prepare(48000.0, 128, 1, shortSweep());
+    VariableLoop loop(probe, 1024);
+    int sweeps = 0;
+    PhaseHooks hooks = delaySequence(loop, {512}, sweeps);
+    std::uint64_t dropouts = 0;
+    hooks.dropouts = [&] {
+        if (sweeps == 2) ++dropouts;
+        return dropouts;
+    };
+    const PhaseResult r = runPhase(probe, warmupConfig(2, 10), hooks);
+    CHECK(sweeps == 5);
+    CHECK(r.warmup == 3);
+    CHECK(r.settled);
+    CHECK(r.discarded == 0);
+    CHECK(r.kept.size() == 2);
 }
 
 TEST_CASE("phase result rules", "[engine]") {
