@@ -37,7 +37,7 @@ struct DeviceConfig {
     std::string inputId;      // empty = system default
     std::string outputId;     // empty = system default
     double      sampleRate    = 48000.0;
-    FrameCount  blockFrames   = 0;      // 0 = ask the driver for its minimum
+    FrameCount  blockFrames   = 0;      // 0 = the driver's minimum (ASIO: the driver's preferred size)
     int         numChannels   = 2;      // what the ENGINE runs at
     bool        exclusiveMode = false;  // WASAPI exclusive; ignored elsewhere
     double      ringBlocks    = kDefaultRingBlocks;  // capture ring target, in blocks; Null ignores it

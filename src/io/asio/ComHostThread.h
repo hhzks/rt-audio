@@ -12,8 +12,7 @@
 
 namespace rt {
 
-// A COM single-threaded apartment with a message loop and a hidden window. ASIO drivers expect all
-// calls from the thread that created them, and their control panels need a message loop.
+// A COM single-threaded apartment with a message loop and a hidden window.
 class ComHostThread {
 public:
     ComHostThread();
