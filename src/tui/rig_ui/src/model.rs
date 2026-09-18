@@ -259,6 +259,7 @@ pub trait Engine {
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
+    fn control_panel(&mut self) -> Result<(), EngineError>;
     fn latency_enter(&mut self) -> Result<(), EngineError>;
     fn latency_leave(&mut self) -> Result<(), EngineError>;
     fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError>;
@@ -318,6 +319,7 @@ pub struct FakeEngine {
     pub latency_script: RefCell<VecDeque<LatencyStatus>>,
     pub latency_calls: Vec<String>,
     pub fail_latency_start: Option<EngineError>,
+    pub panel_opens: usize,
 }
 
 fn entry(id: &str, name: &str, inputs: i32, outputs: i32) -> DeviceEntry {
@@ -423,6 +425,7 @@ impl FakeEngine {
             latency_script: RefCell::new(VecDeque::new()),
             latency_calls: Vec::new(),
             fail_latency_start: None,
+            panel_opens: 0,
         }
     }
 
@@ -523,6 +526,17 @@ impl Engine for FakeEngine {
             ));
         }
         Ok(self.stop("could not open the new config; could not restore the previous config"))
+    }
+
+    fn control_panel(&mut self) -> Result<(), EngineError> {
+        if self.config.backend == "asio" {
+            self.panel_opens += 1;
+            Ok(())
+        } else {
+            Err(EngineError::State(
+                "this backend has no driver panel".into(),
+            ))
+        }
     }
 
     fn latency_enter(&mut self) -> Result<(), EngineError> {

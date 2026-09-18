@@ -205,6 +205,7 @@ unsafe extern "C" {
         cfg: *const RtOpenConfig,
         outcome: *mut i32,
     ) -> i32;
+    pub fn rt_session_control_panel(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_enter(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_leave(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_start(

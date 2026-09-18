@@ -119,7 +119,22 @@ impl Picker {
         self.edited.backend == "wasapi"
     }
 
+    pub fn is_asio(&self) -> bool {
+        self.edited.backend == "asio"
+    }
+
+    pub fn field_name(&self, field: Field) -> &'static str {
+        if self.is_asio() && field == Field::Input {
+            "driver"
+        } else {
+            field.name()
+        }
+    }
+
     pub fn visible_fields(&self) -> Vec<Field> {
+        if self.is_asio() {
+            return vec![Field::Input, Field::Block, Field::Rate, Field::Ring];
+        }
         let mut f = vec![Field::Input, Field::Output];
         if self.is_wasapi() {
             f.push(Field::Mode);
@@ -134,7 +149,7 @@ impl Picker {
         match field {
             Field::Rate => self.is_wasapi(),
             Field::Block => self.is_wasapi() && self.edited.exclusive,
-            Field::Ring => self.edited.backend == "null",
+            Field::Ring => self.edited.backend == "null" || self.is_asio(),
             _ => false,
         }
     }
@@ -182,12 +197,20 @@ impl Picker {
             .iter()
             .find(|d| if output { d.default_out } else { d.default_in })
             .map(|d| d.name.as_str());
-        let mut list = vec![Choice {
-            id: String::new(),
-            label: match default_name {
+        let first = if self.is_asio() {
+            match self.devices.first() {
+                Some(d) => format!("first driver ({})", d.name),
+                None => "first driver".into(),
+            }
+        } else {
+            match default_name {
                 Some(n) => format!("System default ({n})"),
                 None => "System default".into(),
-            },
+            }
+        };
+        let mut list = vec![Choice {
+            id: String::new(),
+            label: first,
         }];
         let listed: Vec<&DeviceEntry> = self
             .devices
@@ -231,6 +254,9 @@ impl Picker {
                     self.edited.output = id;
                 } else {
                     self.edited.input = id;
+                }
+                if self.is_asio() {
+                    self.edited.output = self.edited.input.clone();
                 }
                 true
             }
@@ -285,7 +311,13 @@ impl Picker {
                 mode.to_owned()
             }
             Field::Block if self.read_only(Field::Block) => "device minimum".into(),
-            Field::Block if self.edited.block == 0 => "driver minimum".into(),
+            Field::Block if self.edited.block == 0 => {
+                if self.is_asio() {
+                    "driver preferred".into()
+                } else {
+                    "driver minimum".into()
+                }
+            }
             Field::Block => {
                 let rate = if self.is_wasapi() {
                     device_rate
@@ -312,7 +344,9 @@ impl Picker {
     pub fn note(&self, field: Field) -> &'static str {
         match field {
             Field::Rate if self.is_wasapi() => "set by the device mix format",
-            Field::Block if self.is_wasapi() && !self.read_only(Field::Block) => {
+            Field::Block
+                if (self.is_wasapi() || self.is_asio()) && !self.read_only(Field::Block) =>
+            {
                 "the driver can round it"
             }
             Field::Ring if !self.read_only(Field::Ring) => "lower: less delay, more risk",
@@ -518,5 +552,43 @@ mod tests {
     fn khz_formats_whole_and_fractional_rates() {
         assert_eq!(khz(48000.0), "48 kHz");
         assert_eq!(khz(44100.0), "44.1 kHz");
+    }
+
+    #[test]
+    fn asio_shows_one_driver_field_and_no_ring() {
+        let p = Picker::new(config("asio"), Ok(devices()));
+        assert_eq!(
+            p.visible_fields(),
+            vec![Field::Input, Field::Block, Field::Rate, Field::Ring]
+        );
+        assert_eq!(p.field_name(Field::Input), "driver");
+        assert!(p.read_only(Field::Ring));
+        assert!(!p.read_only(Field::Rate));
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "n/a");
+    }
+
+    #[test]
+    fn asio_driver_choice_sets_both_directions() {
+        let mut p = Picker::new(config("asio"), Ok(devices()));
+        assert_eq!(p.choices(Field::Input)[0].label, "first driver (Mic)");
+        p.select(Field::Input);
+        assert!(p.step(1));
+        assert!(!p.edited.input.is_empty());
+        assert_eq!(p.edited.input, p.edited.output);
+    }
+
+    #[test]
+    fn asio_block_zero_is_the_driver_preferred_size() {
+        let mut c = config("asio");
+        c.block = 0;
+        let p = Picker::new(c, Ok(devices()));
+        assert_eq!(p.label(Field::Block, 48000.0, " · "), "driver preferred");
+        assert_eq!(p.note(Field::Block), "the driver can round it");
+    }
+
+    #[test]
+    fn wasapi_keeps_its_field_names() {
+        let p = Picker::new(config("wasapi"), Ok(devices()));
+        assert_eq!(p.field_name(Field::Input), "input");
     }
 }

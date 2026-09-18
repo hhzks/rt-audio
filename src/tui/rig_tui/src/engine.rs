@@ -375,6 +375,11 @@ impl Engine for FfiEngine {
         Ok(result)
     }
 
+    fn control_panel(&mut self) -> Result<(), EngineError> {
+        // SAFETY: `self.s` is live.
+        self.check(unsafe { ffi::rt_session_control_panel(self.s) })
+    }
+
     fn latency_enter(&mut self) -> Result<(), EngineError> {
         // SAFETY: `self.s` is live.
         self.check(unsafe { ffi::rt_session_latency_enter(self.s) })

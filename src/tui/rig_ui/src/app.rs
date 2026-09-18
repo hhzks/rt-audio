@@ -15,6 +15,8 @@ pub const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 pub const MESSAGE_TIME: Duration = Duration::from_secs(2);
 pub const SETTLE: Duration = Duration::from_millis(250);
 pub const RETRY_EVERY: Duration = Duration::from_secs(2);
+pub const PANEL_OPENED: &str =
+    "driver panel opened; after a change, rt_rig reopens the device in about 2 s";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -42,6 +44,7 @@ pub enum Msg {
     OpenPicker,
     ClosePicker,
     Rescan,
+    DriverPanel,
     OpenLatency,
     StartControl,
     LevelDown,
@@ -67,6 +70,7 @@ pub fn map_key(ev: &Event, mode: Mode) -> Option<Msg> {
             KeyCode::Char('R') => Msg::Rescan,
             KeyCode::Esc | KeyCode::Char('o') => Msg::ClosePicker,
             KeyCode::Char(' ') => Msg::ToggleBypass,
+            KeyCode::Char('p') => Msg::DriverPanel,
             KeyCode::Char('q') => Msg::Quit,
             _ => return None,
         });
@@ -267,6 +271,14 @@ impl App {
                 if let Some(p) = self.picker.as_mut() {
                     p.set_devices(devices);
                 }
+            }
+            Msg::DriverPanel => {
+                let text = match engine.control_panel() {
+                    Ok(()) => PANEL_OPENED.to_owned(),
+                    Err(EngineError::State(m)) => m,
+                    Err(e) => e.to_string(),
+                };
+                self.flash(&text);
             }
             Msg::Quit => {
                 if self
@@ -893,6 +905,7 @@ mod tests {
             (Esc, Msg::ClosePicker),
             (Char('o'), Msg::ClosePicker),
             (Char(' '), Msg::ToggleBypass),
+            (Char('p'), Msg::DriverPanel),
             (Char('q'), Msg::Quit),
         ];
         for (code, msg) in cases {
@@ -905,6 +918,7 @@ mod tests {
         assert_eq!(map_key(&ctrl_c, Mode::Picker), Some(Msg::QuitNow));
         assert_eq!(map_key(&key(Char('o')), Mode::Rig), Some(Msg::OpenPicker));
         assert_eq!(map_key(&key(Char('r')), Mode::Rig), Some(Msg::ResetStats));
+        assert_eq!(map_key(&key(Char('p')), Mode::Rig), None);
     }
 
     #[test]
@@ -1224,5 +1238,23 @@ mod tests {
         assert!(lines[2].contains("21.89") && lines[2].contains("0.41"));
         assert!(lines[3].contains(" 1.25 ") && lines[3].contains("n/a"));
         assert!(lines[3].ends_with("UNSTABLE"));
+    }
+
+    #[test]
+    fn driver_panel_opens_for_asio() {
+        let (mut e, mut app, t0) = setup();
+        e.config.backend = "asio".into();
+        app.update(Msg::DriverPanel, &mut e, t0).unwrap();
+        assert_eq!(e.panel_opens, 1);
+        assert_eq!(app.message(), Some(PANEL_OPENED));
+    }
+
+    #[test]
+    fn driver_panel_reports_a_backend_without_one() {
+        let (mut e, mut app, t0) = setup();
+        e.config.backend = "wasapi".into();
+        app.update(Msg::DriverPanel, &mut e, t0).unwrap();
+        assert_eq!(e.panel_opens, 0);
+        assert_eq!(app.message(), Some("this backend has no driver panel"));
     }
 }
