@@ -74,6 +74,9 @@ public:
 
     virtual DeviceStatus status() const = 0;
     virtual bool isRunning() const = 0;
+
+    // True if the backend opened its driver panel. Must not block the caller.
+    virtual bool openControlPanel() { return false; }
 };
 
 } // namespace rt

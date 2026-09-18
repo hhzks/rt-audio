@@ -246,6 +246,10 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
     }
 }
 
+int32_t rt_session_control_panel(rt_session* s) {
+    return guarded(s, [](rt::Session& session) { session.controlPanel(); });
+}
+
 int32_t rt_session_latency_enter(rt_session* s) {
     return guarded(s, [](rt::Session& session) { session.latencyEnter(); });
 }

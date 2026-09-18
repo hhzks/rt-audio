@@ -242,6 +242,14 @@ DeviceStatus AsioDevice::status() const {
     return s;
 }
 
+bool AsioDevice::openControlPanel() {
+    if (!host_ || !processing_.load(std::memory_order_acquire)) return false;
+    host_->post([this] {
+        if (driver_) driver_->controlPanel();
+    });
+    return true;
+}
+
 void AsioDevice::releaseOnHost() noexcept {
     processing_.store(false, std::memory_order_release);
     if (driver_) {

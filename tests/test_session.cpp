@@ -153,6 +153,8 @@ struct LoopbackRig {
     std::atomic<bool>  connected{true};   // false: the input hears nothing of the output
     std::atomic<float> tone{0.0f};        // amplitude of a 1 kHz sine added to the input
     std::atomic<float> outPeak{0.0f};     // max |out| of the last block
+    bool               hasPanel = false;
+    int                panelOpens = 0;
 };
 
 // Feeds its output back to its input through a delay line, faster than real time.
@@ -183,6 +185,12 @@ public:
     void close() override { halt(); }
     DeviceStatus status() const override { return status_; }
     bool isRunning() const override { return running_.load(); }
+
+    bool openControlPanel() override {
+        if (!rig_.hasPanel) return false;
+        ++rig_.panelOpens;
+        return true;
+    }
 
 private:
     void run() {
@@ -667,4 +675,15 @@ TEST_CASE("destroying the Session during a run is clean", "[session]") {
         s.latencyStart(LatencyKind::Control, threeRepeats());
     }
     SUCCEED();
+}
+
+TEST_CASE("the driver panel needs a backend that has one", "[session]") {
+    LoopbackRig rig;
+    Session s(loopback(rig));
+    CHECK_THROWS_AS(s.controlPanel(), SessionStateError);
+    s.open(Backend::Null, nullConfig());
+    CHECK_THROWS_WITH(s.controlPanel(), "this backend has no driver panel");
+    rig.hasPanel = true;
+    s.controlPanel();
+    CHECK(rig.panelOpens == 1);
 }

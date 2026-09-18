@@ -310,3 +310,18 @@ TEST_CASE("a second open device in the process is refused", "[asio]") {
     first.close();
     CHECK_NOTHROW(second.open(fakeConfig(), &cb));
 }
+
+TEST_CASE("the driver panel opens on the host thread without blocking the caller", "[asio]") {
+    FakeAsio fake;
+    std::promise<void> release;
+    fake.panelGate = release.get_future().share();
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    CHECK(!dev.openControlPanel());
+    dev.open(fakeConfig(), &cb);
+    CHECK(dev.openControlPanel());   // returns while the panel is still open
+    fake.panelEntered.get_future().wait();
+    CHECK(fake.threadOf("controlPanel") == fake.threadOf("init"));
+    release.set_value();
+    dev.close();
+}

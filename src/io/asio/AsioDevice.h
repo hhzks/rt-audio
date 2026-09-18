@@ -41,6 +41,7 @@ public:
     void close() override;
     DeviceStatus status() const override;
     bool isRunning() const override { return running_.load(std::memory_order_acquire); }
+    bool openControlPanel() override;
 
 private:
     static void      onBufferSwitch(long index, ASIOBool directProcess);

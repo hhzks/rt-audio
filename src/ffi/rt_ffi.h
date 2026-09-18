@@ -145,6 +145,7 @@ int32_t     rt_session_snapshot(rt_session* s, rt_snapshot* out);
 int32_t     rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total);
 int32_t     rt_session_config(const rt_session* s, rt_config_desc* out);
 int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
+int32_t     rt_session_control_panel(rt_session* s);
 
 int32_t     rt_session_latency_enter(rt_session* s);
 int32_t     rt_session_latency_leave(rt_session* s);

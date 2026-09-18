@@ -234,6 +234,19 @@ TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     rt_session_destroy(s);
 }
 
+TEST_CASE("the driver panel call checks its argument and state", "[ffi]") {
+    CHECK(rt_session_control_panel(nullptr) == RT_E_ARG);
+    rt_session* s = rt_session_create();
+    CHECK(rt_session_control_panel(s) == RT_E_STATE);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_control_panel(s) == RT_E_STATE);
+    char buf[128];
+    rt_session_last_error(s, buf, sizeof buf);
+    CHECK(std::string(buf) == "this backend has no driver panel");
+    rt_session_destroy(s);
+}
+
 TEST_CASE("device ids that do not fit are rejected", "[ffi]") {
     rt_session* s = rt_session_create();
     const std::string longId(RT_ID_BYTES, 'x');
