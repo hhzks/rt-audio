@@ -246,8 +246,26 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
     }
 }
 
-int32_t rt_session_control_panel(rt_session* s) {
-    return guarded(s, [](rt::Session& session) { session.controlPanel(); });
+int32_t rt_session_control_panel(rt_session* s, int32_t* result) {
+    if (s == nullptr || result == nullptr) return RT_E_ARG;
+    try {
+        switch (s->session.controlPanel()) {
+        case rt::PanelResult::Modal:         *result = RT_PANEL_MODAL; break;
+        case rt::PanelResult::AlreadyOpen:   *result = RT_PANEL_ALREADY_OPEN; break;
+        case rt::PanelResult::NoDriverPanel: *result = RT_PANEL_NONE; break;
+        default:                             *result = RT_PANEL_OPENED; break;
+        }
+        return RT_OK;
+    } catch (const rt::SessionStateError& e) {
+        s->lastError = e.what();
+        return RT_E_STATE;
+    } catch (const std::exception& e) {
+        s->lastError = e.what();
+        return RT_E_DEVICE;
+    } catch (...) {
+        s->lastError = "unknown exception";
+        return RT_E_DEVICE;
+    }
 }
 
 int32_t rt_session_latency_enter(rt_session* s) {

@@ -26,6 +26,11 @@ extern "C" {
 #define RT_RECONF_ROLLED_BACK 1
 #define RT_RECONF_STOPPED     2
 
+#define RT_PANEL_OPENED       0
+#define RT_PANEL_MODAL        1
+#define RT_PANEL_ALREADY_OPEN 2
+#define RT_PANEL_NONE         3   /* the driver has no panel */
+
 #define RT_ID_BYTES   256
 #define RT_NAME_BYTES 128
 
@@ -84,6 +89,7 @@ typedef struct {
     double   params[RT_MAX_STRIPS][RT_MAX_PARAMS]; /* engine-held values, post-clamp */
     int32_t  channels;
     uint8_t  running;
+    uint8_t  panel_open;                     /* a modal driver panel is open */
     char     device_error[256];                 /* empty unless the backend reported one */
 } rt_snapshot;
 
@@ -145,7 +151,7 @@ int32_t     rt_session_snapshot(rt_session* s, rt_snapshot* out);
 int32_t     rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total);
 int32_t     rt_session_config(const rt_session* s, rt_config_desc* out);
 int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
-int32_t     rt_session_control_panel(rt_session* s);
+int32_t     rt_session_control_panel(rt_session* s, int32_t* result);
 
 int32_t     rt_session_latency_enter(rt_session* s);
 int32_t     rt_session_latency_leave(rt_session* s);

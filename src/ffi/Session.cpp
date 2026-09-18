@@ -96,6 +96,7 @@ void Session::open(Backend backend, const DeviceConfig& config) {
 ReconfigureResult Session::reconfigure(const DeviceConfig& next) {
     checkOpened();
     if (running_.load()) throw SessionStateError("a latency measurement is running");
+    if (device_ && device_->panelOpen()) throw SessionStateError("close the driver panel first");
     destroyDevice();
 
     const auto e1 = tryStart(next);
@@ -132,12 +133,17 @@ void Session::stop() noexcept {
     try { device_->stop(); } catch (...) {}
 }
 
-void Session::controlPanel() {
+PanelResult Session::controlPanel() {
     checkOpened();
-    if (!device_) throw SessionStateError("no device is open: " + stopReason_);
-    if (!device_->isRunning()) throw SessionStateError("the device is stopped");
-    if (device_->openControlPanel(config_) == PanelResult::Unsupported)
-        throw SessionStateError("this backend has no driver panel");
+    const char* none = "this backend has no driver panel";
+    if (!backendCaps(backend_).driverPanel) throw SessionStateError(none);
+    if (!device_) {
+        device_ = make_(backend_);
+        if (!device_) throw std::runtime_error("device factory returned no device");
+    }
+    const PanelResult r = device_->openControlPanel(config_);
+    if (r == PanelResult::Unsupported) throw SessionStateError(none);
+    return r;
 }
 
 const DeviceConfig& Session::config() const {
@@ -449,9 +455,10 @@ void Session::snapshot(rt_snapshot& out) {
         for (std::size_t p = 0; p < n; ++p) out.params[st][p] = getParam(st, p);
     }
 
-    out.running = static_cast<std::uint8_t>(device_ && device_->isRunning() ? 1 : 0);
+    out.running    = static_cast<std::uint8_t>(device_ && device_->isRunning() ? 1 : 0);
+    out.panel_open = static_cast<std::uint8_t>(device_ && device_->panelOpen() ? 1 : 0);
     copyUtf8Truncated(out.device_error, sizeof out.device_error,
-                      device_ ? ds.lastError : stopReason_);
+                      ds.lastError.empty() ? stopReason_ : ds.lastError);
 }
 
 } // namespace rt

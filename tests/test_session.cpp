@@ -155,6 +155,10 @@ struct LoopbackRig {
     std::atomic<float> outPeak{0.0f};     // max |out| of the last block
     bool               hasPanel = false;
     int                panelOpens = 0;
+    PanelResult        panelResult = PanelResult::Opened;
+    std::atomic<bool>  panelOpen{false};
+    bool               failOpen = false;
+    int                makes = 0;
 };
 
 // Feeds its output back to its input through a delay line, faster than real time.
@@ -168,6 +172,7 @@ public:
     std::vector<DeviceInfo> enumerate() override { return {}; }
 
     void open(const DeviceConfig& config, IAudioCallback* callback) override {
+        if (rig_.failOpen) throw std::runtime_error("cannot open");
         config_   = config;
         callback_ = callback;
         if (config_.blockFrames <= 0) config_.blockFrames = 128;
@@ -189,8 +194,9 @@ public:
     PanelResult openControlPanel(const DeviceConfig&) override {
         if (!rig_.hasPanel) return PanelResult::Unsupported;
         ++rig_.panelOpens;
-        return PanelResult::Opened;
+        return rig_.panelResult;
     }
+    bool panelOpen() const override { return rig_.panelOpen.load(); }
 
 private:
     void run() {
@@ -232,6 +238,7 @@ private:
 
 Session::DeviceMaker loopback(LoopbackRig& rig) {
     return [&rig](Backend) -> std::unique_ptr<IAudioDevice> {
+        ++rig.makes;
         return std::make_unique<LoopbackDevice>(rig);
     };
 }
@@ -679,21 +686,64 @@ TEST_CASE("destroying the Session during a run is clean", "[session]") {
 
 TEST_CASE("the driver panel needs a backend that has one", "[session]") {
     LoopbackRig rig;
+    rig.hasPanel = true;
     Session s(loopback(rig));
     CHECK_THROWS_AS(s.controlPanel(), SessionStateError);
     s.open(Backend::Null, nullConfig());
     CHECK_THROWS_WITH(s.controlPanel(), "this backend has no driver panel");
+    CHECK(rig.panelOpens == 0);
+}
+
+TEST_CASE("the driver panel result comes from the device", "[session]") {
+    LoopbackRig rig;
     rig.hasPanel = true;
-    s.controlPanel();
+    rig.panelResult = PanelResult::Modal;
+    Session s(loopback(rig));
+    s.open(Backend::Asio, nullConfig());
+    CHECK(s.controlPanel() == PanelResult::Modal);
     CHECK(rig.panelOpens == 1);
 }
 
-TEST_CASE("the driver panel of a stopped device is a state error", "[session]") {
+TEST_CASE("the driver panel of a stopped device uses that device", "[session]") {
     LoopbackRig rig;
     rig.hasPanel = true;
     Session s(loopback(rig));
-    s.open(Backend::Null, nullConfig());
+    s.open(Backend::Asio, nullConfig());
     s.stop();
-    CHECK_THROWS_WITH(s.controlPanel(), "the device is stopped");
-    CHECK(rig.panelOpens == 0);
+    const int makes = rig.makes;
+    CHECK(s.controlPanel() == PanelResult::Opened);
+    CHECK(rig.makes == makes);
+    CHECK(rig.panelOpens == 1);
+}
+
+TEST_CASE("the driver panel with no device makes one and keeps the stop reason", "[session]") {
+    LoopbackRig rig;
+    rig.hasPanel = true;
+    Session s(loopback(rig));
+    s.open(Backend::Asio, nullConfig());
+    rig.failOpen = true;
+    DeviceConfig next = nullConfig();
+    next.blockFrames = 512;
+    REQUIRE(s.reconfigure(next) == ReconfigureResult::Stopped);
+    const int makes = rig.makes;
+    CHECK(s.controlPanel() == PanelResult::Opened);
+    CHECK(rig.makes == makes + 1);
+    rt_snapshot snap{};
+    s.snapshot(snap);
+    CHECK(snap.running == 0);
+    CHECK(std::string(snap.device_error).find("could not") != std::string::npos);
+}
+
+TEST_CASE("reconfigure refuses while a modal driver panel is open", "[session]") {
+    LoopbackRig rig;
+    rig.hasPanel = true;
+    Session s(loopback(rig));
+    s.open(Backend::Asio, nullConfig());
+    rig.panelOpen = true;
+    rt_snapshot snap{};
+    s.snapshot(snap);
+    CHECK(snap.panel_open == 1);
+    CHECK_THROWS_WITH(s.reconfigure(nullConfig()), "close the driver panel first");
+    rig.panelOpen = false;
+    CHECK(s.reconfigure(nullConfig()) == ReconfigureResult::Applied);
 }

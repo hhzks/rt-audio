@@ -19,6 +19,10 @@ pub const RT_FLAG_TOGGLE: u8 = 2;
 pub const RT_RECONF_APPLIED: i32 = 0;
 pub const RT_RECONF_ROLLED_BACK: i32 = 1;
 pub const RT_RECONF_STOPPED: i32 = 2;
+
+pub const RT_PANEL_MODAL: i32 = 1;
+pub const RT_PANEL_ALREADY_OPEN: i32 = 2;
+pub const RT_PANEL_NONE: i32 = 3;
 pub const RT_ID_BYTES: usize = 256;
 pub const RT_NAME_BYTES: usize = 128;
 
@@ -93,6 +97,7 @@ pub struct RtSnapshot {
     pub params: [[f64; RT_MAX_PARAMS]; RT_MAX_STRIPS],
     pub channels: i32,
     pub running: u8,
+    pub panel_open: u8,
     pub device_error: [c_char; 256],
 }
 
@@ -205,7 +210,7 @@ unsafe extern "C" {
         cfg: *const RtOpenConfig,
         outcome: *mut i32,
     ) -> i32;
-    pub fn rt_session_control_panel(s: *mut RtSession) -> i32;
+    pub fn rt_session_control_panel(s: *mut RtSession, result: *mut i32) -> i32;
     pub fn rt_session_latency_enter(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_leave(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_start(
@@ -236,7 +241,7 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtDeviceDesc; backend, input, output, sample_rate, claimed_rtt_ms, block_frames, channels);
     layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns,
         capture_underruns, in_clips, out_clips, deadline_ns, hist_window, in_peak, out_peak,
-        params, channels, running, device_error);
+        params, channels, running, panel_open, device_error);
     layout!(v, RtDeviceInfo; id, name, max_input_channels, max_output_channels,
         default_sample_rate, is_default_input, is_default_output);
     layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive, ring_blocks);

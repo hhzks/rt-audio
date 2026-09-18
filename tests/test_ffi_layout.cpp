@@ -63,6 +63,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_snapshot, params);
     FIELD(rt_snapshot, channels);
     FIELD(rt_snapshot, running);
+    FIELD(rt_snapshot, panel_open);
     FIELD(rt_snapshot, device_error);
 
     LAYOUT(rt_device_info);
