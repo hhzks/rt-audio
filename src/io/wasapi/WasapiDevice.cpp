@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #include "io/wasapi/WasapiDevice.h"
 #include "io/wasapi/MmcssScope.h"
+#include "io/wasapi/WasapiFormat.h"
 
 #include "core/ChannelMap.h"
 #include "core/RingPush.h"
@@ -85,7 +86,15 @@ const char* formatName(SampleFormat f) noexcept {
     return "?";
 }
 
-WAVEFORMATEXTENSIBLE* allocFormat(WORD channels, DWORD rate, WORD bits, bool isFloat) noexcept {
+std::string endpointFormatText(const WAVEFORMATEX* fmt, SampleFormat f) {
+    const int validBits = fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE
+        ? reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt)->Samples.wValidBitsPerSample
+        : 0;
+    return formatText(formatName(f), fmt->wBitsPerSample, validBits);
+}
+
+WAVEFORMATEXTENSIBLE* allocFormat(WORD channels, DWORD rate, WORD bits, WORD validBits,
+                                  bool isFloat) noexcept {
     auto* w = static_cast<WAVEFORMATEXTENSIBLE*>(CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE)));
     if (!w) return nullptr;
     std::memset(w, 0, sizeof(*w));
@@ -96,7 +105,7 @@ WAVEFORMATEXTENSIBLE* allocFormat(WORD channels, DWORD rate, WORD bits, bool isF
     w->Format.nBlockAlign     = static_cast<WORD>(channels * (bits / 8));
     w->Format.nAvgBytesPerSec = static_cast<DWORD>(rate * w->Format.nBlockAlign);
     w->Format.cbSize          = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-    w->Samples.wValidBitsPerSample = bits;
+    w->Samples.wValidBitsPerSample = validBits;
     w->dwChannelMask = channels == 1 ? SPEAKER_FRONT_CENTER
                      : channels == 2 ? static_cast<DWORD>(SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT)
                                      : static_cast<DWORD>((1u << channels) - 1u);
@@ -217,34 +226,25 @@ void WasapiDevice::initEndpoint(Endpoint& ep, EDataFlow flow, const std::string&
     // GetMixFormat describes SHARED mode. Exclusive endpoints often reject it.
     if (exclusive &&
         FAILED(ep.client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, ep.format, nullptr))) {
-        const WORD  chans = ep.format->nChannels;
-        const DWORD rate  = ep.format->nSamplesPerSec;
-        const struct { WORD bits; bool isFloat; } depths[] = {
-            { 32, true }, { 32, false }, { 24, false }, { 16, false },
+        const DWORD rate = ep.format->nSamplesPerSec;
+        const auto alloc = [rate](const FormatCandidate& c) {
+            return allocFormat(static_cast<WORD>(c.channels), rate, static_cast<WORD>(c.bits),
+                               static_cast<WORD>(c.validBits), c.isFloat);
         };
-        // Channel count is negotiable too: capture endpoints are often mono-only
-        // in exclusive mode even when their mix format is stereo.
-        const WORD channelCandidates[] = { chans, 2, 1 };
-        bool found = false;
-        for (WORD c : channelCandidates) {
-            if (c == 0) continue;
-            for (const auto& d : depths) {
-                auto* w = allocFormat(c, rate, d.bits, d.isFloat);
-                if (!w) continue;
-                if (SUCCEEDED(ep.client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
-                                                           &w->Format, nullptr))) {
-                    CoTaskMemFree(ep.format);
-                    ep.format = &w->Format;
-                    found = true;
-                    break;
-                }
-                CoTaskMemFree(w);
-            }
-            if (found) break;
-        }
-        if (!found)
+        const auto picked = pickExclusiveFormat(ep.format->nChannels, [&](const FormatCandidate& c) {
+            WAVEFORMATEXTENSIBLE* w = alloc(c);
+            if (!w) return false;
+            const bool ok = SUCCEEDED(ep.client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,
+                                                                   &w->Format, nullptr));
+            CoTaskMemFree(w);
+            return ok;
+        });
+        WAVEFORMATEXTENSIBLE* w = picked ? alloc(*picked) : nullptr;
+        if (!w)
             throw std::runtime_error("endpoint accepted no exclusive-mode format "
-                                     "(tried 32f, 32, 24, 16-bit at the mix rate)");
+                                     "(tried 32f, 32, 24-in-32, 24, 16-bit at the mix rate)");
+        CoTaskMemFree(ep.format);
+        ep.format = &w->Format;
     }
 
     const auto detected = detectFormat(ep.format);
@@ -370,8 +370,8 @@ void WasapiDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     status_.numChannels = engineCh;
     status_.backendName = std::string(config.exclusiveMode ? "WASAPI (exclusive)"
                                                           : "WASAPI (shared)")
-                        + " in " + formatName(capture_.sampleFormat)
-                        + " out " + formatName(render_.sampleFormat);
+                        + " in " + endpointFormatText(capture_.format, capture_.sampleFormat)
+                        + " out " + endpointFormatText(render_.format, render_.sampleFormat);
     status_.estimatedRoundTripMs = bufferedRoundTripMs(
         static_cast<double>(capture_.bufferFrames), static_cast<double>(render_.bufferFrames),
         static_cast<double>(ringTargetFrames_), sr,
