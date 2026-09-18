@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -51,55 +52,65 @@ inline std::int32_t floatToInt(float v, float peak, std::int32_t lo, std::int32_
 
 } // namespace detail
 
-// `count` is samples, not frames. src and dst must not overlap.
-inline void toFloat(const void* src, float* dst, std::size_t count, SampleFormat fmt) noexcept {
+// `count` is samples, not frames; the stride applies to the float side. src and dst must not overlap.
+inline void toFloat(const void* src, float* dst, std::size_t count, SampleFormat fmt,
+                    std::size_t dstStride = 1) noexcept {
     const auto* bytes = static_cast<const unsigned char*>(src);
     switch (fmt) {
         case SampleFormat::Float32:
-            std::memcpy(dst, src, count * sizeof(float));
+            if (dstStride == 1) {
+                std::memcpy(dst, src, count * sizeof(float));
+                return;
+            }
+            for (std::size_t i = 0; i < count; ++i)
+                std::memcpy(dst + i * dstStride, bytes + i * 4, sizeof(float));
             return;
         case SampleFormat::Int16:
             for (std::size_t i = 0; i < count; ++i) {
                 std::int16_t s;
                 std::memcpy(&s, bytes + i * 2, sizeof(s));
-                dst[i] = static_cast<float>(s) / detail::kPeak16;
+                dst[i * dstStride] = static_cast<float>(s) / detail::kPeak16;
             }
             return;
         case SampleFormat::Int24:
             for (std::size_t i = 0; i < count; ++i)
-                dst[i] = static_cast<float>(detail::readInt24(bytes + i * 3)) / detail::kPeak24;
+                dst[i * dstStride] = static_cast<float>(detail::readInt24(bytes + i * 3)) / detail::kPeak24;
             return;
         case SampleFormat::Int32:
             for (std::size_t i = 0; i < count; ++i) {
                 std::int32_t s;
                 std::memcpy(&s, bytes + i * 4, sizeof(s));
-                dst[i] = static_cast<float>(s) / detail::kPeak32;
+                dst[i * dstStride] = static_cast<float>(s) / detail::kPeak32;
             }
             return;
     }
 }
 
-inline void fromFloat(const float* src, void* dst, std::size_t count, SampleFormat fmt) noexcept {
+inline void fromFloat(const float* src, void* dst, std::size_t count, SampleFormat fmt,
+                      std::size_t srcStride = 1) noexcept {
     auto* bytes = static_cast<unsigned char*>(dst);
     switch (fmt) {
         case SampleFormat::Float32:
-            std::memcpy(dst, src, count * sizeof(float));
+            for (std::size_t i = 0; i < count; ++i) {
+                const float v = std::clamp(src[i * srcStride], -1.0f, 1.0f);
+                std::memcpy(bytes + i * 4, &v, sizeof(v));
+            }
             return;
         case SampleFormat::Int16:
             for (std::size_t i = 0; i < count; ++i) {
                 const auto s = static_cast<std::int16_t>(
-                    detail::floatToInt(src[i], detail::kPeak16, -32768, 32767));
+                    detail::floatToInt(src[i * srcStride], detail::kPeak16, -32768, 32767));
                 std::memcpy(bytes + i * 2, &s, sizeof(s));
             }
             return;
         case SampleFormat::Int24:
             for (std::size_t i = 0; i < count; ++i)
                 detail::writeInt24(bytes + i * 3,
-                    detail::floatToInt(src[i], detail::kPeak24, -8388608, 8388607));
+                    detail::floatToInt(src[i * srcStride], detail::kPeak24, -8388608, 8388607));
             return;
         case SampleFormat::Int32:
             for (std::size_t i = 0; i < count; ++i) {
-                const auto s = detail::floatToInt(src[i], detail::kPeak32,
+                const auto s = detail::floatToInt(src[i * srcStride], detail::kPeak32,
                                                   INT32_MIN, INT32_MAX);
                 std::memcpy(bytes + i * 4, &s, sizeof(s));
             }

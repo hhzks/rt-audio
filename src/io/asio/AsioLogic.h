@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 namespace rt {
 
@@ -144,27 +145,27 @@ inline std::int32_t signExtend(std::uint32_t v, int bits) noexcept {
     return static_cast<std::int32_t>(v << shift) >> shift;
 }
 
+constexpr std::optional<SampleFormat> asioCommonFormat(AsioSampleType t) noexcept {
+    switch (t) {
+    case AsioSampleType::Int16LSB:   return SampleFormat::Int16;
+    case AsioSampleType::Int24LSB:   return SampleFormat::Int24;
+    case AsioSampleType::Int32LSB:   return SampleFormat::Int32;
+    case AsioSampleType::Float32LSB: return SampleFormat::Float32;
+    default:                         return std::nullopt;
+    }
+}
+
 } // namespace detail
 
 inline void asioToFloat(const void* src, AsioSampleType type, float* dst, int stride,
                         FrameCount frames) noexcept {
+    if (const auto f = detail::asioCommonFormat(type)) {
+        toFloat(src, dst, idx(frames), *f, idx(stride));
+        return;
+    }
     const auto* b = static_cast<const unsigned char*>(src);
     const std::size_t step = idx(stride);
     switch (type) {
-    case AsioSampleType::Int16LSB:
-        for (FrameCount i = 0; i < frames; ++i) {
-            std::int16_t s;
-            std::memcpy(&s, b + idx(i) * 2, 2);
-            dst[idx(i) * step] = static_cast<float>(s) / detail::kPeak16;
-        }
-        return;
-    case AsioSampleType::Int24LSB:
-        for (FrameCount i = 0; i < frames; ++i)
-            dst[idx(i) * step] = static_cast<float>(detail::readInt24(b + idx(i) * 3)) / detail::kPeak24;
-        return;
-    case AsioSampleType::Float32LSB:
-        for (FrameCount i = 0; i < frames; ++i) std::memcpy(&dst[idx(i) * step], b + idx(i) * 4, 4);
-        return;
     case AsioSampleType::Float64LSB:
         for (FrameCount i = 0; i < frames; ++i) {
             double d;
@@ -172,7 +173,6 @@ inline void asioToFloat(const void* src, AsioSampleType type, float* dst, int st
             dst[idx(i) * step] = static_cast<float>(d);
         }
         return;
-    case AsioSampleType::Int32LSB:
     case AsioSampleType::Int32LSB16:
     case AsioSampleType::Int32LSB18:
     case AsioSampleType::Int32LSB20:
@@ -194,35 +194,20 @@ inline void asioToFloat(const void* src, AsioSampleType type, float* dst, int st
 
 inline void floatToAsio(const float* src, int stride, void* dst, AsioSampleType type,
                         FrameCount frames) noexcept {
+    if (const auto f = detail::asioCommonFormat(type)) {
+        fromFloat(src, dst, idx(frames), *f, idx(stride));
+        return;
+    }
     auto* b = static_cast<unsigned char*>(dst);
     const std::size_t step = idx(stride);
     const auto at = [&](FrameCount i) { return std::clamp(src[idx(i) * step], -1.0f, 1.0f); };
     switch (type) {
-    case AsioSampleType::Int16LSB:
-        for (FrameCount i = 0; i < frames; ++i) {
-            const auto s = static_cast<std::int16_t>(
-                detail::floatToInt(at(i), detail::kPeak16, -32768, 32767));
-            std::memcpy(b + idx(i) * 2, &s, 2);
-        }
-        return;
-    case AsioSampleType::Int24LSB:
-        for (FrameCount i = 0; i < frames; ++i)
-            detail::writeInt24(b + idx(i) * 3,
-                               detail::floatToInt(at(i), detail::kPeak24, -8388608, 8388607));
-        return;
-    case AsioSampleType::Float32LSB:
-        for (FrameCount i = 0; i < frames; ++i) {
-            const float v = at(i);
-            std::memcpy(b + idx(i) * 4, &v, 4);
-        }
-        return;
     case AsioSampleType::Float64LSB:
         for (FrameCount i = 0; i < frames; ++i) {
             const double v = static_cast<double>(at(i));
             std::memcpy(b + idx(i) * 8, &v, 8);
         }
         return;
-    case AsioSampleType::Int32LSB:
     case AsioSampleType::Int32LSB16:
     case AsioSampleType::Int32LSB18:
     case AsioSampleType::Int32LSB20:
