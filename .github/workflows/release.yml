@@ -204,7 +204,7 @@ jobs:
           This package as a whole is distributed under the GNU General Public License version 3
           (see COPYING). It contains code built from the Steinberg ASIO SDK 2.3.4, used under GPLv3
           (see source/asiosdk/LICENSE.txt). The SDK files used by this build are in source/asiosdk/.
-          The rest of the source is the rt-audio repository at $ref:
+          The rest of the source is the rt-audio repository at ${ref}:
           https://github.com/$env:GITHUB_REPOSITORY/tree/$ref (MIT, see LICENSE).
 
           ASIO is a registered trademark of Steinberg Media Technologies GmbH.
