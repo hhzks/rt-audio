@@ -687,3 +687,13 @@ TEST_CASE("the driver panel needs a backend that has one", "[session]") {
     s.controlPanel();
     CHECK(rig.panelOpens == 1);
 }
+
+TEST_CASE("the driver panel of a stopped device is a state error", "[session]") {
+    LoopbackRig rig;
+    rig.hasPanel = true;
+    Session s(loopback(rig));
+    s.open(Backend::Null, nullConfig());
+    s.stop();
+    CHECK_THROWS_WITH(s.controlPanel(), "the device is stopped");
+    CHECK(rig.panelOpens == 0);
+}

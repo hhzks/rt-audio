@@ -135,6 +135,7 @@ void Session::stop() noexcept {
 void Session::controlPanel() {
     checkOpened();
     if (!device_) throw SessionStateError("no device is open: " + stopReason_);
+    if (!device_->isRunning()) throw SessionStateError("the device is stopped");
     if (!device_->openControlPanel()) throw SessionStateError("this backend has no driver panel");
 }
 
