@@ -109,6 +109,12 @@ jobs:
         working-directory: src/tui
         run: rustup toolchain install
 
+      - name: Cache the ASIO SDK
+        uses: actions/cache@v4
+        with:
+          path: build/windows-clang-asio/_deps/asiosdk-2.3.4
+          key: asio-sdk-${{ hashFiles('cmake/AsioSdk.cmake') }}
+
       - name: Configure
         run: cmake --preset windows-clang-cl-asio
 

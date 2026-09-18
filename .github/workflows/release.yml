@@ -157,30 +157,53 @@ jobs:
           ref: ${{ env.TAG }}
           path: src
 
+      - name: Check for the ASIO preset
+        id: preset
+        shell: pwsh
+        run: |
+          $found = (Test-Path src/CMakePresets.json) -and
+              [bool](Select-String -Path src/CMakePresets.json -Pattern '"windows-clang-cl-asio"' -SimpleMatch -Quiet)
+          "found=$($found.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not $found) { Write-Output "::notice::$env:TAG has no windows-clang-cl-asio preset; no ASIO package is built" }
+
+      - name: Cache the ASIO SDK
+        if: steps.preset.outputs.found == 'true'
+        uses: actions/cache@v4
+        with:
+          path: src/build/windows-clang-asio/_deps/asiosdk-2.3.4
+          key: asio-sdk-${{ hashFiles('src/cmake/AsioSdk.cmake') }}
+
       - name: Install Ninja
+        if: steps.preset.outputs.found == 'true'
         run: choco install ninja -y
 
       - name: Add LLVM to PATH
+        if: steps.preset.outputs.found == 'true'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8
 
       - name: Install Rust toolchain
+        if: steps.preset.outputs.found == 'true'
         working-directory: src/src/tui
         run: rustup toolchain install
 
       - name: Configure
+        if: steps.preset.outputs.found == 'true'
         working-directory: src
         run: cmake --preset windows-clang-cl-asio
 
       - name: Build
+        if: steps.preset.outputs.found == 'true'
         working-directory: src
         run: cmake --build --preset windows-clang-cl-asio
 
       - name: Test
+        if: steps.preset.outputs.found == 'true'
         working-directory: src
         run: ctest --test-dir build/windows-clang-asio --output-on-failure
 
       - name: Package
+        if: steps.preset.outputs.found == 'true'
         id: package
         shell: pwsh
         run: |
@@ -223,6 +246,7 @@ jobs:
           "archive=$name.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
+        if: steps.preset.outputs.found == 'true'
         with:
           name: windows-x64-asio
           path: ${{ steps.package.outputs.archive }}

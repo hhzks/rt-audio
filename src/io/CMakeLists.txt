@@ -4,21 +4,22 @@ set(RT_IO_SOURCES
 )
 
 if(WIN32)
-    list(APPEND RT_IO_SOURCES wasapi/WasapiDevice.cpp asio/ComHostThread.cpp)
+    list(APPEND RT_IO_SOURCES wasapi/WasapiDevice.cpp)
 endif()
 
 add_library(rt_io STATIC ${RT_IO_SOURCES})
 target_link_libraries(rt_io PUBLIC rt_engine)
 
 if(RT_ASIO)
-    target_sources(rt_io PRIVATE asio/AsioDevice.cpp)
+    target_sources(rt_io PRIVATE asio/ComHostThread.cpp asio/AsioDevice.cpp)
     target_include_directories(rt_io SYSTEM PUBLIC "${RT_ASIO_SDK_PATH}/common")
     target_compile_definitions(rt_io PUBLIC RT_HAVE_ASIO)
+    target_link_libraries(rt_io PRIVATE user32)
 endif()
 
 # PRIVATE is deliberate: these must not leak up into rt_dsp's link line.
 if(WIN32)
-    target_link_libraries(rt_io PRIVATE ole32 avrt uuid user32)
+    target_link_libraries(rt_io PRIVATE ole32 avrt uuid)
 endif()
 if(UNIX AND NOT APPLE)
     find_package(Threads REQUIRED)
