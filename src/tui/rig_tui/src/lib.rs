@@ -37,8 +37,13 @@ enum ColorArg {
     version,
     about = "rt-rig: play through the rt-audio engine"
 )]
+#[cfg_attr(feature = "asio", command(after_help = rig_ui::ASIO_NOTICE))]
 struct Args {
     /// wasapi | alsa | null (default: platform default)
+    #[cfg_attr(
+        feature = "asio",
+        arg(help = "wasapi | asio | alsa | null (default: platform default)")
+    )]
     #[arg(long)]
     backend: Option<String>,
     /// capture device id (default: system default)
@@ -51,6 +56,12 @@ struct Args {
     #[arg(long, default_value_t = 48000.0)]
     rate: f64,
     /// requested block size in frames (0 = driver minimum)
+    #[cfg_attr(
+        feature = "asio",
+        arg(
+            help = "requested block size in frames (0 = driver minimum; ASIO\u{ae}: driver preferred)"
+        )
+    )]
     #[arg(long, default_value_t = 0)]
     block: i32,
     /// WASAPI exclusive mode

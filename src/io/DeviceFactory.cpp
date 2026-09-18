@@ -1,5 +1,6 @@
 #include "io/DeviceFactory.h"
 #include "io/null/NullDevice.h"
+#include <algorithm>
 #include <stdexcept>
 
 #if defined(_WIN32)
@@ -68,6 +69,17 @@ std::vector<std::string> availableBackends() {
 #endif
     v.emplace_back("null");
     return v;
+}
+
+bool backendAvailable(std::string_view key) {
+    const auto v = availableBackends();
+    return std::ranges::find(v, key) != v.end();
+}
+
+std::string backendList() {
+    std::string s;
+    for (const std::string& b : availableBackends()) s += (s.empty() ? "" : " | ") + b;
+    return s;
 }
 
 std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend) {

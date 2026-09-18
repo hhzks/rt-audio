@@ -21,4 +21,10 @@ std::optional<Backend> backendFromName(std::string_view name);
 Backend          resolveBackend(Backend b);
 std::string_view backendKey(Backend b);
 
+inline constexpr std::string_view kAsioTrademarkNotice =
+    "ASIO is a registered trademark of Steinberg Media Technologies GmbH.";
+
+bool        backendAvailable(std::string_view key);
+std::string backendList();   // for example "wasapi | asio | null"
+
 } // namespace rt
