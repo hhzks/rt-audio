@@ -21,7 +21,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 ComHostThread::ComHostThread() {
     wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!wake_) throw std::runtime_error("CreateEvent failed");
-    thread_ = std::thread([this] { threadMain(); });
+    try {
+        thread_ = std::thread([this] { threadMain(); });
+    } catch (...) {
+        CloseHandle(wake_);
+        throw;
+    }
     std::unique_lock lock(mutex_);
     ready_.wait(lock, [this] { return started_; });
     if (!startError_.empty()) {
