@@ -312,7 +312,7 @@ impl App {
         self.snapshot = snap;
     }
 
-    // A settled picker change first; otherwise a retry while Stopped in rig mode.
+    // A settled picker change first; otherwise a retry while Stopped and no run is active.
     pub fn due(&mut self, engine: &dyn Engine, now: Instant) -> Option<Config> {
         self.now = now;
         if let Some((config, at)) = &self.pending {
@@ -330,7 +330,7 @@ impl App {
             .latency
             .as_ref()
             .is_some_and(|l| l.step == Step::Running);
-        if self.picker.is_none() && !run_active && self.status() == Status::Stopped && retry_due {
+        if !run_active && self.status() == Status::Stopped && retry_due {
             self.last_retry = Some(now);
             self.retrying = true;
             return Some(engine.config().clone());
@@ -1051,19 +1051,33 @@ mod tests {
         assert!(run_due(&mut app, &mut e, at(2000)));
         ingest(&mut app, &mut e, at(2000));
 
+        e.fail_ids.insert("mic".into());
         app.update(Msg::OpenPicker, &mut e, at(2100)).unwrap();
+        app.update(Msg::Coarse(1), &mut e, at(4400)).unwrap();
         assert!(
             !run_due(&mut app, &mut e, at(4500)),
-            "no retry while the picker is open"
+            "no retry while a picker change is pending"
         );
-        app.update(Msg::ClosePicker, &mut e, at(4500)).unwrap();
+        assert!(run_due(&mut app, &mut e, at(4650)));
+        assert_eq!(e.reconfigures[2].input, "mic", "the change, not a retry");
+        ingest(&mut app, &mut e, at(4650));
+        app.update(Msg::ClosePicker, &mut e, at(4650)).unwrap();
 
         e.fail_ids.clear();
-        assert!(run_due(&mut app, &mut e, at(4600)));
+        assert!(run_due(&mut app, &mut e, at(4700)));
         assert_eq!(app.message(), Some("device back"));
-        ingest(&mut app, &mut e, at(4600));
+        ingest(&mut app, &mut e, at(4700));
         assert_eq!(app.status(), Status::Live);
-        assert_eq!(e.reconfigures.len(), 3);
+        assert_eq!(e.reconfigures.len(), 4);
+    }
+
+    #[test]
+    fn a_stopped_device_is_retried_while_the_picker_is_open() {
+        let (mut e, mut app, t0) = setup();
+        e.next.running = false;
+        ingest(&mut app, &mut e, t0);
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        assert_eq!(app.due(&e, t0), Some(e.config.clone()));
     }
 
     #[test]
