@@ -75,8 +75,7 @@ constexpr const char* asioTypeName(AsioSampleType t) noexcept {
     return "unknown";
 }
 
-// Granularity -1: powers of two from min to max. 0: the preferred size only. A tie goes to the
-// larger size, because a larger buffer is never less stable.
+// Granularity -1: powers of two from min to max. 0: the preferred size only. A tie picks the larger size.
 constexpr long chooseAsioBufferSize(long requested, long minSize, long maxSize, long preferred,
                                     long granularity) noexcept {
     if (requested <= 0 || granularity == 0) return preferred;
