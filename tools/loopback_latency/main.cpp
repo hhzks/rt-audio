@@ -104,10 +104,17 @@ std::string escapeJson(const std::string& s) {
     return out;
 }
 
+std::string warmupText(const PhaseResult& p) {
+    if (!p.settled) return "not settled after " + std::to_string(p.warmup) + " sweeps";
+    return std::to_string(p.warmup) + (p.warmup == 1 ? " sweep" : " sweeps");
+}
+
 PhaseResult runToolPhase(IAudioDevice& device, LoopbackProbe& probe, AudioEngine* engine,
-                         int repeats, int maxLagFrames, double sampleRate, const char* label) {
+                         int repeats, int maxWarmup, int maxLagFrames, double sampleRate,
+                         const char* label) {
     PhaseConfig cfg;
     cfg.repeats      = repeats;
+    cfg.maxWarmup    = maxWarmup;
     cfg.maxLagFrames = maxLagFrames;
     cfg.sampleRate   = sampleRate;
 
@@ -132,6 +139,8 @@ PhaseResult runToolPhase(IAudioDevice& device, LoopbackProbe& probe, AudioEngine
         case PhaseEvent::Clipped:
             std::cerr << "warning: " << label << " repeat " << repeat
                       << ": capture clipped (>= 0.999 magnitude)\n";
+            break;
+        case PhaseEvent::Warmup:
             break;
         }
     };
@@ -317,7 +326,8 @@ int main(int argc, char** argv) {
         {
             device->start();
             StopGuard stopGuard(*device);
-            phaseA = runToolPhase(*device, probe, nullptr, repeats, maxLagFrames,
+            phaseA = runToolPhase(*device, probe, nullptr, repeats,
+                                  expectSilence ? 0 : kMeasurementWarmup, maxLagFrames,
                                   st.sampleRate, "direct");
             device->stop();
         }
@@ -344,7 +354,8 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        std::cout << "neg. control : asserted by operator (--control-verified)\n";
+        std::cout << "neg. control : asserted by operator (--control-verified)\n"
+                  << "warm-up      : " << warmupText(phaseA) << "\n";
 
         if (!phaseA.passedMajority()) {
             std::cerr << "\nerror: measurement rejected -- " << phaseA.kept.size()
@@ -403,8 +414,8 @@ int main(int argc, char** argv) {
                 callback.setEngine(&engine);
                 device->start();
                 StopGuard stopGuard(*device);
-                phaseB = runToolPhase(*device, probe, &engine, repeats, maxLagFrames,
-                                      st.sampleRate, "chain");
+                phaseB = runToolPhase(*device, probe, &engine, repeats, kMeasurementWarmup,
+                                      maxLagFrames, st.sampleRate, "chain");
                 device->stop();
                 callback.setEngine(nullptr);
             }
@@ -420,7 +431,8 @@ int main(int argc, char** argv) {
 
                 std::cout << "\nchain latency: reported " << chainReportedFrames << " frames ("
                           << (1000.0 * chainReportedFrames / st.sampleRate)
-                          << " ms)   measured " << chainMeasuredMs << " ms\n";
+                          << " ms)   measured " << chainMeasuredMs << " ms   warm-up "
+                          << warmupText(phaseB) << "\n";
                 if (spreadB > 1.0) {
                     std::cout << "UNSTABLE (chain): spread across repeats (" << spreadB
                               << " ms) exceeds 1 ms.\n";
@@ -455,6 +467,8 @@ int main(int argc, char** argv) {
               << "  \"correlation\": " << (rep ? rep->peakCorrelation : 0.0) << ",\n"
               << "  \"peakToSidelobe\": " << (rep ? rep->peakToSidelobe : 0.0) << ",\n"
               << "  \"unaccountedMs\": " << unaccountedMs << ",\n"
+              << "  \"warmupSweeps\": " << phaseA.warmup << ",\n"
+              << "  \"settled\": " << (phaseA.settled ? "true" : "false") << ",\n"
               << "  \"chainReportedFrames\": " << chainReportedFrames << ",\n"
               << "  \"chainMeasuredMs\": " << (chainMeasuredValid ? chainMeasuredMs : 0.0) << ",\n"
               << "  \"chainMeasuredValid\": " << (chainMeasuredValid ? "true" : "false") << "\n"
