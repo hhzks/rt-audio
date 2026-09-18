@@ -411,7 +411,12 @@ impl App {
             };
             s += &format!(
                 "{:<18} {:>5} {:>11.2} {:>8.2} {:>10.2} {:>9}{flag}\n",
-                r.label, r.ring_blocks, r.measured_ms, r.spread_ms, r.computed_ms, chain
+                r.label,
+                crate::latency::ring_cell(r.ring_blocks),
+                r.measured_ms,
+                r.spread_ms,
+                r.computed_ms,
+                chain
             );
         }
         s.pop();
@@ -1256,5 +1261,24 @@ mod tests {
         app.update(Msg::DriverPanel, &mut e, t0).unwrap();
         assert_eq!(e.panel_opens, 0);
         assert_eq!(app.message(), Some("this backend has no driver panel"));
+    }
+
+    #[test]
+    fn the_quit_table_shows_no_ring_for_asio_rows() {
+        let (_, mut app, _) = setup();
+        app.latency_rows.push(LatencyRow {
+            label: "asio 64/48k".into(),
+            ring_blocks: 0.0,
+            measured_ms: 6.51,
+            spread_ms: 0.02,
+            computed_ms: 6.25,
+            chain_ms: Some(0.33),
+            unstable: false,
+            clipped: false,
+        });
+        let table = app.quit_table().unwrap();
+        let lines: Vec<&str> = table.lines().collect();
+        assert!(lines[2].starts_with("asio 64/48k"));
+        assert!(lines[2].contains("     — "), "{}", lines[2]);
     }
 }

@@ -7,8 +7,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
+use crate::ASIO_NOTICE;
 use crate::app::{App, Mode, Row};
-use crate::latency::Step;
+use crate::latency::{Step, ring_cell};
 use crate::meters::{FLOOR_DB, Meter};
 use crate::model::{LatencyKind, LatencyPhase, LatencyState};
 use crate::picker::{Field, PickerStatus, khz};
@@ -647,7 +648,12 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let x0 = inner.x;
     let mut y = inner.y + 1;
 
-    let backend = format!("  {:<8}{}", "backend", p.edited.backend.to_uppercase());
+    let name = if p.is_asio() {
+        "ASIO\u{ae}".to_owned()
+    } else {
+        p.edited.backend.to_uppercase()
+    };
+    let backend = format!("  {:<8}{}", "backend", name);
     put(buf, x0, y, &backend, normal);
     y += 1;
 
@@ -657,7 +663,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         let read_only = p.read_only(field);
         let cursor = if is_sel { g.cursor } else { " " };
         let mut x = put(buf, x0, y, cursor, theme.style(Role::Accent));
-        x = put(buf, x, y, &format!(" {:<8}", field.name()), normal);
+        x = put(buf, x, y, &format!(" {:<8}", p.field_name(field)), normal);
         let value = p.label(field, app.device.sample_rate, sep);
         let text = if read_only {
             format!("  {value}")
@@ -724,12 +730,21 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         }
     };
     let bottom = inner.y + inner.height;
-    let lines = usize::from(bottom.saturating_sub(y)).min(3);
+    let notice_rows: u16 = if p.is_asio() { 2 } else { 0 };
+    let lines = usize::from(bottom.saturating_sub(y).saturating_sub(notice_rows)).min(3);
     for (i, line) in wrap(&status, width.saturating_sub(2), lines, ell)
         .iter()
         .enumerate()
     {
         put(buf, x0 + 2, y + i as u16, line, theme.style(role));
+    }
+    if p.is_asio() {
+        for (i, line) in wrap(ASIO_NOTICE, width.saturating_sub(2), 2, ell)
+            .iter()
+            .enumerate()
+        {
+            put(buf, x0 + 2, bottom - 2 + i as u16, line, dim);
+        }
     }
 }
 
@@ -805,7 +820,7 @@ fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         let mut line = format!(
             "  {:<17}{:>5}{:>7.2}{pm}{:<4.2}{:>7.2}{:>6}",
             fit(&r.label, 17, ell),
-            r.ring_blocks,
+            ring_cell(r.ring_blocks),
             r.measured_ms,
             r.spread_ms,
             r.computed_ms,
@@ -904,8 +919,13 @@ fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     }
     let g = &theme.glyphs;
     let text = if app.mode() == Mode::Picker {
+        let panel = if app.picker.as_ref().is_some_and(|p| p.is_asio()) {
+            "  p panel"
+        } else {
+            ""
+        };
         format!(
-            " {} field  {} change  R rescan  Esc close  qq quit",
+            " {} field  {} change{panel}  R rescan  Esc close  qq quit",
             g.key_updown, g.key_leftright
         )
     } else if app.mode() == Mode::Latency {
@@ -1394,5 +1414,32 @@ mod tests {
         let r120 = rows(&app, &t, 120, 30);
         assert!(!has(&r120, "unacc."));
         assert!(has(&r120, "CALLBACK TIME") && has(&r120, "LATENCY"));
+    }
+
+    #[test]
+    fn asio_picker_shows_the_driver_and_the_trademark_notice() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "asio");
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(has(&r, "backend ASIO®"));
+        assert!(has(&r, "▸ driver  ◂ first driver (Mic)"));
+        assert!(!has(&r, "output"));
+        assert!(!has(&r, "mode"));
+        assert!(has(&r, "ring      n/a"));
+        assert!(has(
+            &r,
+            "ASIO is a registered trademark of Steinberg Media Techno"
+        ));
+        assert!(has(&r, "logies GmbH."));
+        assert!(r[23].contains("p panel"), "{}", r[23]);
+    }
+
+    #[test]
+    fn wasapi_picker_has_no_trademark_notice_or_panel_hint() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "wasapi");
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(!has(&r, "registered trademark"));
+        assert!(!r[23].contains("p panel"), "{}", r[23]);
     }
 }

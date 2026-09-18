@@ -4,6 +4,14 @@ pub const LEVELS_DB: [f64; 9] = [-24.0, -21.0, -18.0, -15.0, -12.0, -9.0, -6.0, 
 const DEFAULT_LEVEL: usize = 6;
 pub const UNSTABLE_MS: f64 = 1.0;
 
+pub fn ring_cell(ring_blocks: f64) -> String {
+    if ring_blocks == 0.0 {
+        "—".to_owned()
+    } else {
+        format!("{ring_blocks}")
+    }
+}
+
 fn short_rate(rate: f64) -> String {
     let k = rate / 1000.0;
     if k.fract() == 0.0 {
@@ -66,7 +74,11 @@ impl LatencyRow {
                 device.block_frames,
                 short_rate(device.sample_rate)
             ),
-            ring_blocks: config.ring_blocks,
+            ring_blocks: if config.backend == "asio" {
+                0.0
+            } else {
+                config.ring_blocks
+            },
             measured_ms: status.measured_ms,
             spread_ms: status.spread_ms,
             computed_ms: status.computed_ms,
@@ -375,5 +387,39 @@ mod tests {
         };
         let row = LatencyRow::new(&tight, &device(144, 48000.0), &done_measure());
         assert_eq!(row.ring_blocks, 1.25);
+    }
+
+    #[test]
+    fn the_ring_cell_is_a_dash_without_a_ring() {
+        assert_eq!(ring_cell(0.0), "—");
+        assert_eq!(ring_cell(1.25), "1.25");
+        assert_eq!(ring_cell(2.0), "2");
+    }
+
+    #[test]
+    fn an_asio_row_has_no_ring() {
+        let mut config = Config {
+            backend: "asio".into(),
+            input: String::new(),
+            output: String::new(),
+            rate: 48000.0,
+            block: 64,
+            exclusive: false,
+            ring_blocks: 2.0,
+        };
+        let device = Device {
+            backend: "ASIO".into(),
+            input: String::new(),
+            output: String::new(),
+            sample_rate: 48000.0,
+            block_frames: 64,
+            channels: 2,
+            claimed_rtt_ms: 6.0,
+        };
+        let row = LatencyRow::new(&config, &device, &LatencyStatus::default());
+        assert_eq!(row.ring_blocks, 0.0);
+        config.backend = "wasapi".into();
+        let row = LatencyRow::new(&config, &device, &LatencyStatus::default());
+        assert_eq!(row.ring_blocks, 2.0);
     }
 }
