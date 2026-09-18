@@ -315,6 +315,7 @@ int main(int argc, char** argv) {
 
         device->open(devCfg, &callback);
         const auto st = device->status();
+        const BackendCaps caps = backendCaps(backend);
 
         probe.prepare(st.sampleRate, st.blockFrames, st.numChannels, sweepCfg);
         if (probe.reference().empty()) {
@@ -326,7 +327,9 @@ int main(int argc, char** argv) {
 
         std::cout << "device       : in \"" << inName << "\"  out \"" << outName << "\"\n"
                   << "               " << st.backendName << ", " << st.sampleRate << " Hz, "
-                  << st.blockFrames << " frames, ring " << ringBlocks << " blocks\n";
+                  << st.blockFrames << " frames";
+        if (caps.ring) std::cout << ", ring " << ringBlocks << " blocks";
+        std::cout << "\n";
 
         PhaseResult phaseA;
         {
@@ -465,8 +468,10 @@ int main(int argc, char** argv) {
             f << "{\n"
               << "  \"device\": \"" << escapeJson(st.backendName) << "\",\n"
               << "  \"sampleRate\": " << st.sampleRate << ",\n"
-              << "  \"blockFrames\": " << st.blockFrames << ",\n"
-              << "  \"ringBlocks\": " << ringBlocks << ",\n"
+              << "  \"blockFrames\": " << st.blockFrames << ",\n";
+            f << "  \"ringBlocks\": ";
+            if (caps.ring) f << ringBlocks; else f << "null";
+            f << ",\n"
               << "  \"computedMs\": " << computedMs << ",\n"
               << "  \"measuredMs\": " << measuredMs << ",\n"
               << "  \"spreadMs\": " << spreadMs << ",\n"

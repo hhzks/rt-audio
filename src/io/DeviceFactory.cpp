@@ -56,6 +56,30 @@ std::string_view backendKey(Backend b) {
     return "default";
 }
 
+BackendCaps backendCaps(Backend b) {
+    BackendCaps c;
+    switch (resolveBackend(b)) {
+    case Backend::Wasapi:
+        c.ring = c.exclusiveMode = c.rateFromDevice = c.blockRounded = true;
+        c.displayName = "WASAPI";
+        break;
+    case Backend::Asio:
+        c.oneDriver = c.driverPanel = c.blockZeroPreferred = c.blockRounded = true;
+        c.displayName = "ASIO®";
+        c.notice      = kAsioTrademarkNotice;
+        break;
+    case Backend::Alsa:
+        c.ring        = true;
+        c.displayName = "ALSA";
+        break;
+    case Backend::Null:
+    case Backend::Default:
+        c.displayName = "NULL";
+        break;
+    }
+    return c;
+}
+
 std::vector<std::string> availableBackends() {
     std::vector<std::string> v;
 #if defined(_WIN32)
