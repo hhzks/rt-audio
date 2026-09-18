@@ -60,6 +60,8 @@ struct DeviceStatus {
     std::string   lastError;             // set on an unrecoverable transfer error; empty otherwise
 };
 
+enum class PanelResult { Unsupported, Opened, Modal, AlreadyOpen, NoDriverPanel };
+
 class IAudioDevice {
 public:
     virtual ~IAudioDevice() = default;
@@ -75,8 +77,10 @@ public:
     virtual DeviceStatus status() const = 0;
     virtual bool isRunning() const = 0;
 
-    // True if the backend opened its driver panel. Must not block the caller.
-    virtual bool openControlPanel() { return false; }
+    // Must not block longer than a driver load plus a short wait. Throws on a driver error.
+    virtual PanelResult openControlPanel(const DeviceConfig&) { return PanelResult::Unsupported; }
+    // True while a modal driver panel blocks the backend's driver thread.
+    virtual bool panelOpen() const { return false; }
 };
 
 } // namespace rt

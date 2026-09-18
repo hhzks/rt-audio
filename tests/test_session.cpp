@@ -186,10 +186,10 @@ public:
     DeviceStatus status() const override { return status_; }
     bool isRunning() const override { return running_.load(); }
 
-    bool openControlPanel() override {
-        if (!rig_.hasPanel) return false;
+    PanelResult openControlPanel(const DeviceConfig&) override {
+        if (!rig_.hasPanel) return PanelResult::Unsupported;
         ++rig_.panelOpens;
-        return true;
+        return PanelResult::Opened;
     }
 
 private:

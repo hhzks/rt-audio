@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <format>
+#include <future>
 #include <stdexcept>
 
 namespace rt {
@@ -130,8 +131,7 @@ void AsioDevice::open(const DeviceConfig& config, IAudioCallback* callback) {
     host_->run([&] { openOnHost(id, config, callback); });
 }
 
-void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
-                            IAudioCallback* callback) {
+void AsioDevice::loadOnHost(const std::string& id) {
     AsioDevice* none = nullptr;
     if (!active_.compare_exchange_strong(none, this))
         throw std::runtime_error("another ASIO device is open in this process");
@@ -143,6 +143,16 @@ void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
             driver_->getErrorMessage(message);
             throw std::runtime_error(std::format("the ASIO driver \"{}\" did not start: {}", id, message));
         }
+    } catch (...) {
+        releaseOnHost();
+        throw;
+    }
+}
+
+void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
+                            IAudioCallback* callback) {
+    loadOnHost(id);
+    try {
         long ins = 0, outs = 0;
         check(driver_->getChannels(&ins, &outs), "getChannels");
         if (ins < 1 || outs < 1)
@@ -249,12 +259,31 @@ DeviceStatus AsioDevice::status() const {
     return s;
 }
 
-bool AsioDevice::openControlPanel() {
-    if (!host_ || !processing_.load(std::memory_order_acquire)) return false;
-    host_->post([this] {
-        if (driver_) driver_->controlPanel();
+PanelResult AsioDevice::openControlPanel(const DeviceConfig& config) {
+    if (panelBusy_.load(std::memory_order_acquire)) return PanelResult::AlreadyOpen;
+    if (!host_) host_ = std::make_unique<ComHostThread>();
+    bool loaded = false;
+    host_->run([&] { loaded = driver_ != nullptr; });
+    if (!loaded) {
+        const std::string id = driverId(config);
+        host_->run([&] {
+            loadOnHost(id);
+            panelOnly_ = true;
+        });
+    }
+    auto result = std::make_shared<std::promise<ASIOError>>();
+    std::future<ASIOError> done = result->get_future();
+    panelBusy_.store(true, std::memory_order_release);
+    host_->post([this, result] {
+        const ASIOError e = driver_ ? driver_->controlPanel() : ASE_NotPresent;
+        panelBusy_.store(false, std::memory_order_release);
+        result->set_value(e);
     });
-    return true;
+    if (done.wait_for(kPanelWait) != std::future_status::ready) return PanelResult::Modal;
+    const ASIOError e = done.get();
+    if (e == ASE_OK) return PanelResult::Opened;
+    if (e == ASE_NotPresent) return PanelResult::NoDriverPanel;
+    throw std::runtime_error(std::format("the ASIO driver panel did not open (error {})", e));
 }
 
 void AsioDevice::releaseOnHost() noexcept {
@@ -266,6 +295,7 @@ void AsioDevice::releaseOnHost() noexcept {
     }
     driver_ = nullptr;
     buffersCreated_ = false;
+    panelOnly_ = false;
     running_.store(false, std::memory_order_release);
     AsioDevice* self = this;
     active_.compare_exchange_strong(self, nullptr);

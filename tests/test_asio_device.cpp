@@ -114,9 +114,9 @@ public:
     }
     ASIOError controlPanel() override {
         record("controlPanel");
-        panelEntered.set_value();
+        if (++panelCalls == 1) panelEntered.set_value();
         if (panelGate.valid()) panelGate.wait();
-        return ASE_OK;
+        return panelResult;
     }
     ASIOError future(long, void*) override { return ASE_InvalidParameter; }
     ASIOError outputReady() override { return ASE_NotPresent; }
@@ -138,6 +138,8 @@ public:
     std::atomic<std::uint64_t> mismatches{0};   // output blocks that are not their input x 0.5
     std::promise<void>         panelEntered;
     std::shared_future<void>   panelGate;
+    std::atomic<int>           panelCalls{0};
+    ASIOError                  panelResult = ASE_OK;
     std::vector<std::vector<std::int32_t>> halves;
 
 private:
@@ -374,17 +376,67 @@ TEST_CASE("a second open device in the process is refused", "[asio]") {
     CHECK_NOTHROW(second.open(fakeConfig(), &cb));
 }
 
-TEST_CASE("the driver panel opens on the host thread without blocking the caller", "[asio]") {
+TEST_CASE("a modal driver panel gives Modal, and a second call is not queued", "[asio]") {
     FakeAsio fake;
     std::promise<void> release;
     fake.panelGate = release.get_future().share();
     AsioDevice dev(factoryFor(fake));
     Half cb;
-    CHECK(!dev.openControlPanel());
     dev.open(fakeConfig(), &cb);
-    CHECK(dev.openControlPanel());   // returns while the panel is still open
-    fake.panelEntered.get_future().wait();
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::Modal);
+    CHECK(std::chrono::steady_clock::now() - t0 >= AsioDevice::kPanelWait);
+    CHECK(dev.panelOpen());
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::AlreadyOpen);
     CHECK(fake.threadOf("controlPanel") == fake.threadOf("init"));
     release.set_value();
+    CHECK(waitFor([&] { return !dev.panelOpen(); }));
+    CHECK(fake.panelCalls == 1);
     dev.close();
+}
+
+TEST_CASE("a modeless driver panel gives Opened", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::Opened);
+    CHECK(!dev.panelOpen());
+}
+
+TEST_CASE("a driver without a panel gives NoDriverPanel, and other errors throw", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    fake.panelResult = ASE_NotPresent;
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::NoDriverPanel);
+    fake.panelResult = ASE_HWMalfunction;
+    CHECK_THROWS_WITH(dev.openControlPanel(fakeConfig()), ContainsSubstring("did not open"));
+}
+
+TEST_CASE("the panel on a device that is not open loads the driver only", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::Opened);
+    CHECK(fake.threadOf("init") != 0);
+    CHECK(fake.threadOf("controlPanel") == fake.threadOf("init"));
+    CHECK(fake.threadOf("createBuffers") == 0);
+    CHECK(fake.callbacks == nullptr);
+    CHECK(!fake.released);
+    CHECK(!dev.isRunning());
+    dev.close();
+    CHECK(fake.released);
+}
+
+TEST_CASE("open after a panel-only load releases that driver first", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    REQUIRE(dev.openControlPanel(fakeConfig()) == PanelResult::Opened);
+    dev.open(fakeConfig(), &cb);
+    CHECK(fake.released);
+    CHECK(fake.threadOf("createBuffers") != 0);
+    dev.start();
+    CHECK(dev.isRunning());
 }

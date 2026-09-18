@@ -13,6 +13,7 @@
 #include "iasiodrv.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -42,7 +43,10 @@ public:
     void close() override;
     DeviceStatus status() const override;
     bool isRunning() const override { return running_.load(std::memory_order_acquire); }
-    bool openControlPanel() override;
+    PanelResult openControlPanel(const DeviceConfig& config) override;
+    bool panelOpen() const override { return panelBusy_.load(std::memory_order_acquire); }
+
+    static constexpr std::chrono::milliseconds kPanelWait{250};
 
 private:
     static void      onBufferSwitch(long index, ASIOBool directProcess);
@@ -51,6 +55,7 @@ private:
     static long      onAsioMessage(long selector, long value, void* message, double* opt);
 
     std::string driverId(const DeviceConfig& config);
+    void loadOnHost(const std::string& id);
     void openOnHost(const std::string& id, const DeviceConfig& config, IAudioCallback* callback);
     void releaseOnHost() noexcept;
     void resetOnHost() noexcept;
@@ -75,6 +80,8 @@ private:
     std::vector<float>             engineIn_, engineOut_;
     std::atomic<bool>              running_{false};
     std::atomic<bool>              processing_{false};
+    std::atomic<bool>              panelBusy_{false};
+    bool                           panelOnly_ = false;   // host thread only
     std::atomic<bool>              resetPending_{false};
     std::atomic<double>            requestedRate_{0.0};
     std::atomic<std::uint64_t>     xruns_{0};
