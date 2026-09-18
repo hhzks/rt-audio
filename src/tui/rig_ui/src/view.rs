@@ -163,6 +163,31 @@ fn wrap(s: &str, width: usize, lines: usize, ell: &str) -> Vec<String> {
     out
 }
 
+// Like wrap, but breaks at spaces; a word wider than the line gives the character split.
+fn wrap_words(s: &str, width: usize, lines: usize, ell: &str) -> Vec<String> {
+    if s.split(' ').any(|w| w.chars().count() > width) {
+        return wrap(s, width, lines, ell);
+    }
+    let mut out: Vec<String> = Vec::new();
+    for word in s.split(' ') {
+        match out.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => out.push(word.to_owned()),
+        }
+    }
+    if out.len() > lines {
+        out.truncate(lines);
+        if let Some(last) = out.last_mut() {
+            let longer = format!("{last}{ell}");
+            *last = fit(&longer, width, ell);
+        }
+    }
+    out
+}
+
 fn fmt_ns(theme: &Theme, ns: u64) -> String {
     let ns = ns as f64;
     if ns >= 1e6 {
@@ -739,7 +764,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         put(buf, x0 + 2, y + i as u16, line, theme.style(role));
     }
     if p.is_asio() {
-        for (i, line) in wrap(ASIO_NOTICE, width.saturating_sub(2), 2, ell)
+        for (i, line) in wrap_words(ASIO_NOTICE, width.saturating_sub(2), 2, ell)
             .iter()
             .enumerate()
         {
@@ -1294,6 +1319,9 @@ mod tests {
         assert_eq!(wrap("abcdefgh", 3, 2, "…"), ["abc", "de…"]);
         assert_eq!(wrap("abcd", 3, 2, "…"), ["abc", "d"]);
         assert!(wrap("", 3, 2, "…").is_empty());
+        assert_eq!(wrap_words("ab cd ef", 5, 2, "…"), ["ab cd", "ef"]);
+        assert_eq!(wrap_words("ab cd ef gh ij", 5, 2, "…"), ["ab cd", "ef g…"]);
+        assert_eq!(wrap_words("abcdef gh", 5, 2, "…"), ["abcde", "f gh"]);
     }
 
     #[test]
@@ -1426,11 +1454,12 @@ mod tests {
         assert!(!has(&r, "output"));
         assert!(!has(&r, "mode"));
         assert!(has(&r, "ring      n/a"));
-        assert!(has(
-            &r,
-            "ASIO is a registered trademark of Steinberg Media Techno"
-        ));
-        assert!(has(&r, "logies GmbH."));
+        let i = r
+            .iter()
+            .position(|l| l.contains("ASIO is a registered trademark of Steinberg Media"))
+            .unwrap();
+        assert!(!r[i].contains("Techno"), "{}", r[i]);
+        assert!(r[i + 1].contains("│  Technologies GmbH."), "{}", r[i + 1]);
         assert!(r[23].contains("p panel"), "{}", r[23]);
     }
 
