@@ -243,6 +243,7 @@ void Session::runLatency(LatencyKind kind, LatencySettings settings, std::stop_t
         cfg.repeats      = settings.repeats;
         cfg.maxLagFrames = static_cast<int>(sweep.maxLatencySeconds * st.sampleRate);
         cfg.sampleRate   = st.sampleRate;
+        cfg.maxWarmup    = kind == LatencyKind::Control ? 0 : kMeasurementWarmup;
 
         std::int32_t phase = RT_LAT_PHASE_DIRECT;
         PhaseHooks hooks;
