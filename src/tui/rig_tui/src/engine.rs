@@ -3,8 +3,8 @@ use std::ptr;
 
 use rig_ui::model::{
     Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, LatencyKind,
-    LatencyPhase, LatencyRepeat, LatencySettings, LatencyState, LatencyStatus, Outcome, Param,
-    Snapshot, Strip, Taper,
+    LatencyPhase, LatencyRepeat, LatencySettings, LatencyState, LatencyStatus, Outcome,
+    PanelOutcome, Param, Snapshot, Strip, Taper,
 };
 
 use crate::ffi::{
@@ -307,6 +307,7 @@ impl Engine for FfiEngine {
             out_peak: raw.out_peak[..ch].to_vec(),
             params,
             running: raw.running != 0,
+            panel_open: raw.panel_open != 0,
             device_error: from_c_array(&raw.device_error),
         })
     }
@@ -375,10 +376,16 @@ impl Engine for FfiEngine {
         Ok(result)
     }
 
-    fn control_panel(&mut self) -> Result<(), EngineError> {
+    fn control_panel(&mut self) -> Result<PanelOutcome, EngineError> {
         let mut result: i32 = -1;
         // SAFETY: `self.s` is live and `result` is writable.
-        self.check(unsafe { ffi::rt_session_control_panel(self.s, &mut result) })
+        self.check(unsafe { ffi::rt_session_control_panel(self.s, &mut result) })?;
+        Ok(match result {
+            ffi::RT_PANEL_MODAL => PanelOutcome::Modal,
+            ffi::RT_PANEL_ALREADY_OPEN => PanelOutcome::AlreadyOpen,
+            ffi::RT_PANEL_NONE => PanelOutcome::NoDriverPanel,
+            _ => PanelOutcome::Opened,
+        })
     }
 
     fn latency_enter(&mut self) -> Result<(), EngineError> {

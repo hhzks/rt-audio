@@ -5,7 +5,8 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crate::latency::{Action, Key, LatencyRow, LatencyScreen, Step};
 use crate::meters::{ClipLatch, Meter};
 use crate::model::{
-    Config, Device, Engine, EngineError, HIST_BUCKETS, LatencySettings, Outcome, Snapshot, Strip,
+    Config, Device, Engine, EngineError, HIST_BUCKETS, LatencySettings, Outcome, PanelOutcome,
+    Snapshot, Strip,
 };
 use crate::picker::{Picker, PickerStatus};
 use crate::stats::{Stats, Status};
@@ -15,8 +16,12 @@ pub const QUIT_WINDOW: Duration = Duration::from_millis(1500);
 pub const MESSAGE_TIME: Duration = Duration::from_secs(2);
 pub const SETTLE: Duration = Duration::from_millis(250);
 pub const RETRY_EVERY: Duration = Duration::from_secs(2);
-pub const PANEL_OPENED: &str =
-    "driver panel opened; after a change, rt_rig reopens the device in about 2 s";
+pub const PANEL_OPENED: &str = "driver panel opened; after a change, rt_rig reopens the device";
+pub const PANEL_OPENED_STOPPED: &str = "driver panel opened; close the picker to reopen the device";
+pub const PANEL_MODAL: &str = "driver panel open; close it to continue";
+pub const PANEL_ALREADY_OPEN: &str = "the driver panel is already open";
+pub const PANEL_NONE: &str = "this driver has no panel";
+pub const CLOSE_PANEL_FIRST: &str = "close the driver panel first";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -132,6 +137,7 @@ pub struct App {
     pub show_histogram: bool,
     pub help: bool,
     pub quit: bool,
+    pub forced_exit: bool,
     pub bypass_changed: Option<Instant>,
     pub now: Instant,
     pub bucket_upper_ns: Vec<u64>,
@@ -145,6 +151,7 @@ pub struct App {
     pending: Option<(Config, Instant)>,
     last_retry: Option<Instant>,
     retrying: bool,
+    stop_retried: bool,
 }
 
 impl App {
@@ -179,6 +186,7 @@ impl App {
             show_histogram: false,
             help: false,
             quit: false,
+            forced_exit: false,
             bypass_changed: None,
             now,
             bucket_upper_ns: (0..HIST_BUCKETS)
@@ -194,6 +202,7 @@ impl App {
             pending: None,
             last_retry: None,
             retrying: false,
+            stop_retried: false,
         }
     }
 
@@ -273,15 +282,26 @@ impl App {
                 }
             }
             Msg::DriverPanel => {
-                let text = match engine.control_panel() {
-                    Ok(()) => PANEL_OPENED.to_owned(),
+                let stopped = self.status() == Status::Stopped;
+                let result = engine.control_panel();
+                if stopped && matches!(result, Ok(PanelOutcome::Opened | PanelOutcome::Modal)) {
+                    self.stop_retried = true;
+                }
+                let text = match result {
+                    Ok(PanelOutcome::Opened) if stopped => PANEL_OPENED_STOPPED.to_owned(),
+                    Ok(PanelOutcome::Opened) => PANEL_OPENED.to_owned(),
+                    Ok(PanelOutcome::Modal) => PANEL_MODAL.to_owned(),
+                    Ok(PanelOutcome::AlreadyOpen) => PANEL_ALREADY_OPEN.to_owned(),
+                    Ok(PanelOutcome::NoDriverPanel) => PANEL_NONE.to_owned(),
                     Err(EngineError::State(m)) => m,
                     Err(e) => e.to_string(),
                 };
                 self.flash(&text);
             }
             Msg::Quit => {
-                if self
+                if self.snapshot.panel_open {
+                    self.flash(CLOSE_PANEL_FIRST);
+                } else if self
                     .quit_armed
                     .is_some_and(|t| now.saturating_duration_since(t) <= QUIT_WINDOW)
                 {
@@ -291,7 +311,10 @@ impl App {
                     self.flash("press q again to quit");
                 }
             }
-            Msg::QuitNow => self.quit = true,
+            Msg::QuitNow => {
+                self.forced_exit = self.snapshot.panel_open;
+                self.quit = true;
+            }
         }
         Ok(())
     }
@@ -309,12 +332,19 @@ impl App {
         self.stats
             .ingest(&snap, now, &|h, p| engine.percentile_ns(h, p));
         self.values = snap.params.clone();
+        if snap.running {
+            self.stop_retried = false;
+        }
         self.snapshot = snap;
     }
 
-    // A settled picker change first; otherwise a retry while Stopped and no run is active.
+    // A settled picker change first; otherwise a retry while Stopped: every RETRY_EVERY in rig
+    // mode, one per stop in the picker. Nothing while a modal driver panel is open.
     pub fn due(&mut self, engine: &dyn Engine, now: Instant) -> Option<Config> {
         self.now = now;
+        if self.snapshot.panel_open {
+            return None;
+        }
         if let Some((config, at)) = &self.pending {
             if now.saturating_duration_since(*at) < SETTLE {
                 return None;
@@ -330,9 +360,11 @@ impl App {
             .latency
             .as_ref()
             .is_some_and(|l| l.step == Step::Running);
-        if !run_active && self.status() == Status::Stopped && retry_due {
+        let picker_tried = self.picker.is_some() && self.stop_retried;
+        if !run_active && !picker_tried && self.status() == Status::Stopped && retry_due {
             self.last_retry = Some(now);
             self.retrying = true;
+            self.stop_retried = true;
             return Some(engine.config().clone());
         }
         None
@@ -370,14 +402,16 @@ impl App {
             }
             _ => {}
         }
-        let current = engine.config().clone();
-        if let Some(p) = self.picker.as_mut() {
-            p.edited = current;
-            p.status = match outcome {
-                Outcome::Applied => PickerStatus::Applied,
-                Outcome::RolledBack(m) => PickerStatus::RolledBack(m),
-                Outcome::Stopped(_) => PickerStatus::Idle,
-            };
+        if !retry {
+            let current = engine.config().clone();
+            if let Some(p) = self.picker.as_mut() {
+                p.edited = current;
+                p.status = match outcome {
+                    Outcome::Applied => PickerStatus::Applied,
+                    Outcome::RolledBack(m) => PickerStatus::RolledBack(m),
+                    Outcome::Stopped(_) => PickerStatus::Idle,
+                };
+            }
         }
         self.rebuild(engine);
         Ok(())
@@ -669,7 +703,7 @@ mod tests {
     use crate::stats::Status;
 
     use crate::latency::{LatencyRow, Step};
-    use crate::model::{LatencyKind, LatencyState, LatencyStatus};
+    use crate::model::{LatencyKind, LatencyState, LatencyStatus, PanelOutcome};
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -1260,12 +1294,117 @@ mod tests {
     }
 
     #[test]
-    fn driver_panel_opens_for_asio() {
+    fn each_panel_result_has_its_message() {
+        let cases = [
+            (PanelOutcome::Opened, PANEL_OPENED),
+            (PanelOutcome::Modal, PANEL_MODAL),
+            (PanelOutcome::AlreadyOpen, PANEL_ALREADY_OPEN),
+            (PanelOutcome::NoDriverPanel, PANEL_NONE),
+        ];
+        for (outcome, text) in cases {
+            let (mut e, mut app, t0) = setup();
+            e.config.backend = "asio".into();
+            e.panel_outcome = outcome;
+            ingest(&mut app, &mut e, t0);
+            app.update(Msg::DriverPanel, &mut e, t0).unwrap();
+            assert_eq!(e.panel_opens, 1);
+            assert_eq!(app.message(), Some(text));
+        }
+    }
+
+    #[test]
+    fn the_panel_on_a_stopped_device_uses_the_picker_try() {
         let (mut e, mut app, t0) = setup();
         e.config.backend = "asio".into();
+        e.next.running = false;
+        ingest(&mut app, &mut e, t0);
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
         app.update(Msg::DriverPanel, &mut e, t0).unwrap();
-        assert_eq!(e.panel_opens, 1);
-        assert_eq!(app.message(), Some(PANEL_OPENED));
+        assert_eq!(app.message(), Some(PANEL_OPENED_STOPPED));
+        assert_eq!(app.due(&e, t0), None);
+    }
+
+    #[test]
+    fn the_picker_tries_one_reopen_per_stop() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        e.fail_ids.insert(String::new());
+        e.next.running = false;
+        ingest(&mut app, &mut e, at(0));
+        assert!(run_due(&mut app, &mut e, at(0)), "the one try");
+        ingest(&mut app, &mut e, at(0));
+        assert!(
+            !run_due(&mut app, &mut e, at(2000)),
+            "no second try in the picker"
+        );
+        assert!(!run_due(&mut app, &mut e, at(9000)));
+        app.update(Msg::ClosePicker, &mut e, at(9000)).unwrap();
+        e.fail_ids.clear();
+        assert!(
+            run_due(&mut app, &mut e, at(9000)),
+            "rig mode retries again"
+        );
+        ingest(&mut app, &mut e, at(9000));
+
+        app.update(Msg::OpenPicker, &mut e, at(9100)).unwrap();
+        e.next.running = false;
+        ingest(&mut app, &mut e, at(9200));
+        assert!(
+            run_due(&mut app, &mut e, at(11200)),
+            "a new stop gets a new try"
+        );
+    }
+
+    #[test]
+    fn a_retry_leaves_the_picker_alone() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.picker.as_mut().unwrap().status = PickerStatus::RolledBack("x".into());
+        e.next.running = false;
+        ingest(&mut app, &mut e, t0);
+        assert!(run_due(&mut app, &mut e, t0));
+        assert_eq!(app.message(), Some("device back"));
+        assert_eq!(
+            app.picker.as_ref().unwrap().status,
+            PickerStatus::RolledBack("x".into())
+        );
+    }
+
+    #[test]
+    fn a_modal_panel_holds_changes_retries_and_qq() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        e.config.backend = "asio".into();
+        e.panel_outcome = PanelOutcome::Modal;
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::DriverPanel, &mut e, t0).unwrap();
+        ingest(&mut app, &mut e, at(10));
+        app.update(Msg::Coarse(1), &mut e, at(20)).unwrap();
+        assert!(!run_due(&mut app, &mut e, at(1000)), "the change waits");
+        app.update(Msg::Quit, &mut e, at(1000)).unwrap();
+        app.update(Msg::Quit, &mut e, at(1100)).unwrap();
+        assert!(!app.quit);
+        assert_eq!(app.message(), Some(CLOSE_PANEL_FIRST));
+        e.next.panel_open = false;
+        ingest(&mut app, &mut e, at(1200));
+        assert!(
+            run_due(&mut app, &mut e, at(1200)),
+            "the change applies after the panel closes"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_forces_the_exit_only_with_a_modal_panel() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::QuitNow, &mut e, t0).unwrap();
+        assert!(app.quit && !app.forced_exit);
+
+        let (mut e, mut app, t0) = setup();
+        e.next.panel_open = true;
+        ingest(&mut app, &mut e, t0);
+        app.update(Msg::QuitNow, &mut e, t0).unwrap();
+        assert!(app.quit && app.forced_exit);
     }
 
     #[test]

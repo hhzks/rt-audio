@@ -122,6 +122,14 @@ pub enum Outcome {
     Stopped(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelOutcome {
+    Opened,
+    Modal,
+    AlreadyOpen,
+    NoDriverPanel,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LatencyKind {
     #[default]
@@ -197,6 +205,7 @@ pub struct Snapshot {
     pub out_peak: Vec<f32>,
     pub params: Vec<Vec<f64>>,
     pub running: bool,
+    pub panel_open: bool,
     pub device_error: String,
 }
 
@@ -219,6 +228,7 @@ impl Snapshot {
                 .map(|s| s.params.iter().map(|p| p.default).collect())
                 .collect(),
             running: true,
+            panel_open: false,
             device_error: String::new(),
         }
     }
@@ -259,7 +269,7 @@ pub trait Engine {
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
-    fn control_panel(&mut self) -> Result<(), EngineError>;
+    fn control_panel(&mut self) -> Result<PanelOutcome, EngineError>;
     fn latency_enter(&mut self) -> Result<(), EngineError>;
     fn latency_leave(&mut self) -> Result<(), EngineError>;
     fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError>;
@@ -320,6 +330,7 @@ pub struct FakeEngine {
     pub latency_calls: Vec<String>,
     pub fail_latency_start: Option<EngineError>,
     pub panel_opens: usize,
+    pub panel_outcome: PanelOutcome,
 }
 
 fn entry(id: &str, name: &str, inputs: i32, outputs: i32) -> DeviceEntry {
@@ -426,6 +437,7 @@ impl FakeEngine {
             latency_calls: Vec::new(),
             fail_latency_start: None,
             panel_opens: 0,
+            panel_outcome: PanelOutcome::Opened,
         }
     }
 
@@ -528,15 +540,17 @@ impl Engine for FakeEngine {
         Ok(self.stop("could not open the new config; could not restore the previous config"))
     }
 
-    fn control_panel(&mut self) -> Result<(), EngineError> {
-        if self.config.backend == "asio" {
-            self.panel_opens += 1;
-            Ok(())
-        } else {
-            Err(EngineError::State(
+    fn control_panel(&mut self) -> Result<PanelOutcome, EngineError> {
+        if self.config.backend != "asio" {
+            return Err(EngineError::State(
                 "this backend has no driver panel".into(),
-            ))
+            ));
         }
+        self.panel_opens += 1;
+        if self.panel_outcome == PanelOutcome::Modal {
+            self.next.panel_open = true;
+        }
+        Ok(self.panel_outcome)
     }
 
     fn latency_enter(&mut self) -> Result<(), EngineError> {
