@@ -149,7 +149,10 @@ void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
             throw std::runtime_error("the ASIO driver needs at least one input and one output");
         if (driver_->canSampleRate(config.sampleRate) != ASE_OK)
             throw std::runtime_error(std::format("the ASIO driver does not support {} Hz", config.sampleRate));
-        check(driver_->setSampleRate(config.sampleRate), "setSampleRate");
+        requestedRate_.store(config.sampleRate, std::memory_order_relaxed);
+        if (const ASIOError e = driver_->setSampleRate(config.sampleRate); e != ASE_OK)
+            throw std::runtime_error(
+                std::format("the ASIO driver could not set {} Hz (error {})", config.sampleRate, e));
 
         long minSize = 0, maxSize = 0, preferred = 0, granularity = 0;
         check(driver_->getBufferSize(&minSize, &maxSize, &preferred, &granularity), "getBufferSize");
@@ -215,7 +218,11 @@ void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
 void AsioDevice::start() {
     if (!host_) throw std::runtime_error("AsioDevice::start: not open");
     host_->run([this] {
-        if (!driver_) throw std::runtime_error("AsioDevice::start: not open");
+        if (!driver_) {
+            std::lock_guard lock(statusMutex_);
+            if (!status_.lastError.empty()) throw std::runtime_error(status_.lastError);
+            throw std::runtime_error("AsioDevice::start: not open");
+        }
         if (running_.load()) return;
         check(driver_->start(), "start");
         running_.store(true, std::memory_order_release);
@@ -316,8 +323,9 @@ ASIOTime* AsioDevice::onBufferSwitchTimeInfo(ASIOTime* params, long index, ASIOB
     return params;
 }
 
-void AsioDevice::onSampleRateChanged(ASIOSampleRate) {
-    if (AsioDevice* d = active_.load(std::memory_order_acquire)) d->requestReset();
+void AsioDevice::onSampleRateChanged(ASIOSampleRate rate) {
+    AsioDevice* d = active_.load(std::memory_order_acquire);
+    if (d && rate != d->requestedRate_.load(std::memory_order_relaxed)) d->requestReset();
 }
 
 long AsioDevice::onAsioMessage(long selector, long value, void*, double*) {
@@ -332,7 +340,9 @@ long AsioDevice::onAsioMessage(long selector, long value, void*, double*) {
         d->xruns_.fetch_add(1, std::memory_order_relaxed);
         break;
     case AsioAction::LatenciesChanged:
-        d->host_->post([d] { d->refreshLatencies(); });
+        try {
+            d->host_->post([d] { d->refreshLatencies(); });
+        } catch (...) {}
         break;
     case AsioAction::None:
         break;

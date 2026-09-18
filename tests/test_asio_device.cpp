@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -55,8 +56,8 @@ public:
         return ASE_OK;
     }
     ASIOError getLatencies(long* in, long* out) override {
-        *in = 100;
-        *out = 200;
+        *in = inLatency;
+        *out = outLatency;
         return ASE_OK;
     }
     ASIOError getBufferSize(long* minSize, long* maxSize, long* preferred, long* granularity) override {
@@ -74,6 +75,7 @@ public:
         return ASE_OK;
     }
     ASIOError setSampleRate(ASIOSampleRate r) override {
+        if (setRateFails) return ASE_NoClock;
         rate = r;
         return ASE_OK;
     }
@@ -95,11 +97,13 @@ public:
         halves.clear();
         halves.reserve(static_cast<std::size_t>(count));
         isInput.clear();
+        channels.clear();
         for (long i = 0; i < count; ++i) {
             auto& h = halves.emplace_back(static_cast<std::size_t>(2 * size), 0);
             infos[i].buffers[0] = h.data();
             infos[i].buffers[1] = h.data() + size;
             isInput.push_back(infos[i].isInput == ASIOTrue);
+            channels.push_back(infos[i].channelNum);
         }
         return ASE_OK;
     }
@@ -123,31 +127,46 @@ public:
     }
     std::uint64_t blocks() const { return done.load(); }
 
-    bool                     initOk = true;
-    std::atomic<ULONG>       refs{1};
-    std::atomic<bool>        released{false};
-    ASIOSampleRate           rate = 0.0;
-    ASIOCallbacks*           callbacks = nullptr;
-    long                     frames = 0;
-    std::atomic<std::int32_t> lastOutput{0};
-    std::promise<void>       panelEntered;
-    std::shared_future<void> panelGate;
+    bool                       initOk = true;
+    bool                       setRateFails = false;
+    std::atomic<ULONG>         refs{1};
+    std::atomic<bool>          released{false};
+    ASIOSampleRate             rate = 0.0;
+    std::atomic<long>          inLatency{100}, outLatency{200};
+    ASIOCallbacks*             callbacks = nullptr;
+    long                       frames = 0;
+    std::atomic<std::uint64_t> mismatches{0};   // output blocks that are not their input x 0.5
+    std::promise<void>         panelEntered;
+    std::shared_future<void>   panelGate;
     std::vector<std::vector<std::int32_t>> halves;
 
 private:
+    static std::int32_t inputValue(std::uint64_t block, long channel) {
+        return static_cast<std::int32_t>(block % 1000 + 1 + static_cast<std::uint64_t>(channel)) << 20;
+    }
     void record(const char* call) {
         std::lock_guard lock(m);
         threads[call] = GetCurrentThreadId();
     }
     void loop() {
         long half = 0;
-        while (running) {
+        for (std::uint64_t block = 0; running; ++block) {
             for (std::size_t b = 0; b < halves.size(); ++b)
-                if (isInput[b])
-                    std::fill_n(halves[b].data() + half * frames, frames, std::int32_t{1} << 29);
-            callbacks->bufferSwitch(half, ASIOTrue);
-            for (std::size_t b = 0; b < halves.size(); ++b)
-                if (!isInput[b]) lastOutput = halves[b][static_cast<std::size_t>(half * frames)];
+                std::fill_n(halves[b].data() + half * frames, frames,
+                            isInput[b] ? inputValue(block, channels[b]) : 0);
+            if (block % 2 == 1) {
+                ASIOTime timeInfo{};
+                callbacks->bufferSwitchTimeInfo(&timeInfo, half, ASIOTrue);
+            } else {
+                callbacks->bufferSwitch(half, ASIOTrue);
+            }
+            for (std::size_t b = 0; b < halves.size(); ++b) {
+                if (isInput[b]) continue;
+                const std::int32_t want = inputValue(block, channels[b]) / 2;
+                const std::int32_t* out = halves[b].data() + half * frames;
+                if (!std::all_of(out, out + frames, [want](std::int32_t v) { return v == want; }))
+                    ++mismatches;
+            }
             ++done;
             half ^= 1;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -159,6 +178,7 @@ private:
     }
 
     std::vector<bool>          isInput;
+    std::vector<long>          channels;
     std::atomic<bool>          running{false};
     std::thread                worker;
     std::atomic<std::uint64_t> done{0};
@@ -223,9 +243,9 @@ TEST_CASE("audio passes through the engine callback", "[asio]") {
     Half cb;
     dev.open(fakeConfig(), &cb);
     dev.start();
-    REQUIRE(waitFor([&] { return fake.blocks() >= 5; }));
-    CHECK(fake.lastOutput.load() == (std::int32_t{1} << 28));   // 0.25 in, 0.125 out
+    REQUIRE(waitFor([&] { return fake.blocks() >= 6; }));
     dev.stop();
+    CHECK(fake.mismatches.load() == 0);
 }
 
 TEST_CASE("the host thread makes every driver call", "[asio]") {
@@ -256,6 +276,40 @@ TEST_CASE("a reset request stops the device with a reason", "[asio]") {
     REQUIRE(waitFor([&] { return !dev.isRunning(); }));
     CHECK(dev.status().lastError == "the ASIO driver requested a reset");
     CHECK(fake.released);
+}
+
+TEST_CASE("a latency change updates the round trip", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    fake.inLatency  = 300;
+    fake.outLatency = 420;
+    CHECK(fake.callbacks->asioMessage(kAsioLatenciesChanged, 0, nullptr, nullptr) == 1);
+    CHECK(waitFor([&] { return dev.status().estimatedRoundTripMs == 1000.0 * 720.0 / 48000.0; }));
+}
+
+TEST_CASE("a rate callback resets only for a rate that was not requested", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    fake.callbacks->sampleRateDidChange(48000.0);
+    CHECK_NOTHROW(dev.start());
+    CHECK(dev.isRunning());
+    fake.callbacks->sampleRateDidChange(44100.0);
+    REQUIRE(waitFor([&] { return !dev.isRunning(); }));
+    CHECK(dev.status().lastError == "the ASIO driver requested a reset");
+    CHECK(fake.released);
+}
+
+TEST_CASE("start after a reset gives the reset as the reason", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    CHECK(fake.callbacks->asioMessage(kAsioResetRequest, 0, nullptr, nullptr) == 1);
+    CHECK_THROWS_WITH(dev.start(), "the ASIO driver requested a reset");
 }
 
 TEST_CASE("a resync request counts an xrun", "[asio]") {
@@ -298,6 +352,15 @@ TEST_CASE("an unsupported rate names the rate", "[asio]") {
     DeviceConfig c = fakeConfig();
     c.sampleRate = 96000.0;
     CHECK_THROWS_WITH(dev.open(c, &cb), ContainsSubstring("96000"));
+}
+
+TEST_CASE("a failed rate change names the rate", "[asio]") {
+    FakeAsio fake;
+    fake.setRateFails = true;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    CHECK_THROWS_WITH(dev.open(fakeConfig(), &cb), ContainsSubstring("48000"));
+    CHECK(fake.released);
 }
 
 TEST_CASE("a second open device in the process is refused", "[asio]") {

@@ -22,8 +22,9 @@
 
 namespace rt {
 
-// Duplex through one ASIO driver. Every IASIO call runs on host_; the driver's own thread calls
-// bufferSwitch, which runs the engine callback directly. One open AsioDevice per process.
+// Duplex through one ASIO driver. Every IASIO call except outputReady() runs on host_; the driver's
+// own thread calls bufferSwitch, which runs the engine callback directly. One open AsioDevice per
+// process.
 class AsioDevice : public IAudioDevice {
 public:
     using DriverFactory = std::function<IASIO*(const std::string& id)>;
@@ -75,6 +76,7 @@ private:
     std::atomic<bool>              running_{false};
     std::atomic<bool>              processing_{false};
     std::atomic<bool>              resetPending_{false};
+    std::atomic<double>            requestedRate_{0.0};
     std::atomic<std::uint64_t>     xruns_{0};
     mutable std::mutex             statusMutex_;
     DeviceStatus                   status_{};
