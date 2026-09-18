@@ -213,6 +213,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $required = 'rt_rig.exe', 'rt_audio.exe', 'offline_render.exe', 'loopback_latency.exe',
               'README.md', 'LICENSE', 'COPYING', 'ASIO-NOTICE.txt', 'asio-compatible.svg',
+              'THIRD-PARTY-NOTICES.txt', 'RUST-LIBRARY-COPYRIGHT.html',
               'source/asiosdk/LICENSE.txt', 'source/asiosdk/common/asio.h',
               'source/asiosdk/common/asiosys.h', 'source/asiosdk/common/iasiodrv.h'
           foreach ($f in $required) {
