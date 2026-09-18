@@ -75,7 +75,7 @@ keys; `q q` quits.
   protection against underruns. Measure each value with `m`, and look at the underrun count in
   the header.
 
-## ASIO (Windows)
+## ASIO® (Windows)
 
 <img src="assets/asio-compatible.svg" width="120" alt="ASIO Compatible logo">
 
@@ -96,7 +96,9 @@ stays MIT. Each release has a separate `-asio` Windows package with the licence 
 files that it uses.
 
 Run with `--backend asio`. In `rt_rig`, the picker shows one `driver` field, and `p` opens the
-driver's settings panel. Block 0 means the driver's preferred buffer size.
+driver's settings panel. Block 0 means the driver's preferred buffer size. A buffer size change in
+the driver panel takes effect only when the block is 0; an explicit block size is requested again
+when the device reopens.
 
 With ASIO4ALL on onboard audio:
 - In the ASIO4ALL panel, activate only the output and the input that you use. With all devices
