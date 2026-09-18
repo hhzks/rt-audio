@@ -429,6 +429,15 @@ TEST_CASE("the panel on a device that is not open loads the driver only", "[asio
     CHECK(fake.released);
 }
 
+TEST_CASE("start refuses a driver that was loaded only for its panel", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    CHECK(dev.openControlPanel(fakeConfig()) == PanelResult::Opened);
+    CHECK_THROWS_WITH(dev.start(), "AsioDevice::start: not open");
+    CHECK(!dev.isRunning());
+    CHECK(fake.threadOf("start") == 0);
+}
+
 TEST_CASE("open after a panel-only load releases that driver first", "[asio]") {
     FakeAsio fake;
     AsioDevice dev(factoryFor(fake));

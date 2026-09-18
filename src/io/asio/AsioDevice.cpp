@@ -228,7 +228,7 @@ void AsioDevice::openOnHost(const std::string& id, const DeviceConfig& config,
 void AsioDevice::start() {
     if (!host_) throw std::runtime_error("AsioDevice::start: not open");
     host_->run([this] {
-        if (!driver_) {
+        if (!driver_ || panelOnly_) {
             std::lock_guard lock(statusMutex_);
             if (!status_.lastError.empty()) throw std::runtime_error(status_.lastError);
             throw std::runtime_error("AsioDevice::start: not open");
