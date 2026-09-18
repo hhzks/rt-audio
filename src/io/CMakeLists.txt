@@ -10,6 +10,12 @@ endif()
 add_library(rt_io STATIC ${RT_IO_SOURCES})
 target_link_libraries(rt_io PUBLIC rt_engine)
 
+if(RT_ASIO)
+    target_sources(rt_io PRIVATE asio/AsioDevice.cpp)
+    target_include_directories(rt_io SYSTEM PUBLIC "${RT_ASIO_SDK_PATH}/common")
+    target_compile_definitions(rt_io PUBLIC RT_HAVE_ASIO)
+endif()
+
 # PRIVATE is deliberate: these must not leak up into rt_dsp's link line.
 if(WIN32)
     target_link_libraries(rt_io PRIVATE ole32 avrt uuid user32)
