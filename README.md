@@ -1,6 +1,7 @@
 # rt-audio
 
-Low-latency realtime audio passthrough with an effects chain in C++26 with a Rust TUI frontend. 
+Low-latency realtime audio passthrough with an effects chain in C++26 with a Rust TUI frontend.
+
 Windows and Linux compatible.
 
 <img width="800" height="450" alt="rt-audio" src="https://github.com/user-attachments/assets/4cd0c155-bca4-4342-8fca-0cc456c0135c" />
