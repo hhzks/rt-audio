@@ -47,6 +47,8 @@ public:
     }
     ASIOError stop() override {
         record("stop");
+        if (inSwitch.load()) stoppedDuringCallback = true;
+        ++stops;
         halt();
         return ASE_OK;
     }
@@ -136,6 +138,9 @@ public:
     ASIOCallbacks*             callbacks = nullptr;
     long                       frames = 0;
     std::atomic<std::uint64_t> mismatches{0};   // output blocks that are not their input x 0.5
+    std::atomic<bool>          inSwitch{false};
+    std::atomic<bool>          stoppedDuringCallback{false};
+    std::atomic<int>           stops{0};
     std::promise<void>         panelEntered;
     std::shared_future<void>   panelGate;
     std::atomic<int>           panelCalls{0};
@@ -156,12 +161,14 @@ private:
             for (std::size_t b = 0; b < halves.size(); ++b)
                 std::fill_n(halves[b].data() + half * frames, frames,
                             isInput[b] ? inputValue(block, channels[b]) : 0);
+            inSwitch = true;
             if (block % 2 == 1) {
                 ASIOTime timeInfo{};
                 callbacks->bufferSwitchTimeInfo(&timeInfo, half, ASIOTrue);
             } else {
                 callbacks->bufferSwitch(half, ASIOTrue);
             }
+            inSwitch = false;
             for (std::size_t b = 0; b < halves.size(); ++b) {
                 if (isInput[b]) continue;
                 const std::int32_t want = inputValue(block, channels[b]) / 2;
@@ -192,6 +199,20 @@ struct Half : IAudioCallback {
     void audioDeviceProcess(const float* in, float* out, FrameCount frames) noexcept override {
         for (std::size_t i = 0; i < idx(frames) * 2; ++i) out[i] = in[i] * 0.5f;
     }
+};
+
+// Holds the first callback until the gate opens.
+struct GatedHalf : Half {
+    void audioDeviceProcess(const float* in, float* out, FrameCount frames) noexcept override {
+        if (calls++ == 0) {
+            entered.set_value();
+            gate.wait();
+        }
+        Half::audioDeviceProcess(in, out, frames);
+    }
+    std::atomic<int>         calls{0};
+    std::promise<void>       entered;
+    std::shared_future<void> gate;
 };
 
 DeviceConfig fakeConfig(FrameCount block = 100) {
@@ -448,4 +469,24 @@ TEST_CASE("open after a panel-only load releases that driver first", "[asio]") {
     CHECK(fake.threadOf("createBuffers") != 0);
     dev.start();
     CHECK(dev.isRunning());
+}
+
+TEST_CASE("close waits for a running callback before it stops the driver", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    std::promise<void> open;
+    GatedHalf cb;
+    cb.gate = open.get_future().share();
+    dev.open(fakeConfig(), &cb);
+    dev.start();
+    cb.entered.get_future().wait();
+    auto closing = std::async(std::launch::async, [&] { dev.close(); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (fake.stops.load() == 0 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(fake.stops.load() == 0);
+    open.set_value();
+    closing.get();
+    CHECK(fake.stops.load() == 1);
+    CHECK(!fake.stoppedDuringCallback);
 }
