@@ -85,16 +85,27 @@ void Session::destroyDevice() noexcept {
     device_.reset();
 }
 
-void Session::open(Backend backend, const DeviceConfig& config) {
+// A one-driver backend gets the one id that is set for both input and output.
+static DeviceConfig withDriverIds(Backend backend, DeviceConfig c) {
+    if (backendCaps(backend).oneDriver) {
+        if (c.inputId.empty()) c.inputId = c.outputId;
+        else if (c.outputId.empty()) c.outputId = c.inputId;
+    }
+    return c;
+}
+
+void Session::open(Backend backend, const DeviceConfig& requested) {
     if (opened_) throw SessionStateError("session is already open");
     backend_ = resolveBackend(backend);
+    const DeviceConfig config = withDriverIds(backend_, requested);
     device_  = makeAndStart(config);
     config_  = config;
     opened_  = true;
 }
 
-ReconfigureResult Session::reconfigure(const DeviceConfig& next) {
+ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
     checkOpened();
+    const DeviceConfig next = withDriverIds(backend_, requested);
     if (running_.load()) throw SessionStateError("a latency measurement is running");
     if (device_ && device_->panelOpen()) throw SessionStateError("close the driver panel first");
     destroyDevice();
