@@ -1,4 +1,5 @@
 #include "ffi/rt_ffi.h"
+#include "ffi/CapsFlags.h"
 #include "ffi/DeviceInfoCopy.h"
 #include "ffi/Session.h"
 #include "ffi/Utf8.h"
@@ -223,12 +224,7 @@ int32_t rt_session_caps(const rt_session* s, rt_backend_caps* out) {
     return guarded(s, [&](const rt::Session& session) {
         const rt::BackendCaps c = rt::backendCaps(session.backend());
         *out = rt_backend_caps{};
-        out->flags = (c.ring ? RT_CAP_RING : 0u) | (c.oneDriver ? RT_CAP_ONE_DRIVER : 0u) |
-                     (c.driverPanel ? RT_CAP_DRIVER_PANEL : 0u) |
-                     (c.exclusiveMode ? RT_CAP_EXCLUSIVE_MODE : 0u) |
-                     (c.rateFromDevice ? RT_CAP_RATE_FROM_DEVICE : 0u) |
-                     (c.blockZeroPreferred ? RT_CAP_BLOCK_ZERO_PREFERRED : 0u) |
-                     (c.blockRounded ? RT_CAP_BLOCK_ROUNDED : 0u);
+        out->flags = rt::capsFlags(c);
         rt::copyUtf8Truncated(out->display_name, sizeof out->display_name, c.displayName);
         rt::copyUtf8Truncated(out->notice, sizeof out->notice, c.notice);
     });
@@ -266,12 +262,14 @@ int32_t rt_session_control_panel(rt_session* s, int32_t* result) {
     if (s == nullptr || result == nullptr) return RT_E_ARG;
     try {
         switch (s->session.controlPanel()) {
-        case rt::PanelResult::Modal:         *result = RT_PANEL_MODAL; break;
-        case rt::PanelResult::AlreadyOpen:   *result = RT_PANEL_ALREADY_OPEN; break;
-        case rt::PanelResult::NoDriverPanel: *result = RT_PANEL_NONE; break;
-        default:                             *result = RT_PANEL_OPENED; break;
+        case rt::PanelResult::Opened:        *result = RT_PANEL_OPENED; return RT_OK;
+        case rt::PanelResult::Modal:         *result = RT_PANEL_MODAL; return RT_OK;
+        case rt::PanelResult::AlreadyOpen:   *result = RT_PANEL_ALREADY_OPEN; return RT_OK;
+        case rt::PanelResult::NoDriverPanel: *result = RT_PANEL_NONE; return RT_OK;
+        case rt::PanelResult::Unsupported:   break;
         }
-        return RT_OK;
+        s->lastError = "unexpected driver panel result";
+        return RT_E_INTERNAL;
     } catch (const rt::SessionStateError& e) {
         s->lastError = e.what();
         return RT_E_STATE;

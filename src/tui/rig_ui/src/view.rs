@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
-use crate::app::{App, Mode, Row};
+use crate::app::{App, Mode, PANEL_MODAL, Row};
 use crate::latency::{Step, ring_cell};
 use crate::meters::{FLOOR_DB, Meter};
 use crate::model::{LatencyKind, LatencyPhase, LatencyState};
@@ -745,6 +745,10 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         match &p.status {
             PickerStatus::Applied => ("applied".to_owned(), Role::Good),
             PickerStatus::RolledBack(m) => (format!("rolled back: {m}"), Role::Warn),
+            PickerStatus::Pending if app.snapshot.panel_open => (
+                "waiting for the driver panel to close".to_owned(),
+                Role::Warn,
+            ),
             PickerStatus::Idle | PickerStatus::Pending => (String::new(), Role::Normal),
         }
     };
@@ -934,6 +938,16 @@ fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
 fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     if let Some(m) = app.message() {
         put(buf, area.x + 1, area.y, m, theme.style(Role::Warn));
+        return;
+    }
+    if app.snapshot.panel_open {
+        put(
+            buf,
+            area.x + 1,
+            area.y,
+            PANEL_MODAL,
+            theme.style(Role::Warn),
+        );
         return;
     }
     let g = &theme.glyphs;
@@ -1464,5 +1478,32 @@ mod tests {
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(!has(&r, "registered trademark"));
         assert!(!r[23].contains("p panel"), "{}", r[23]);
+    }
+
+    #[test]
+    fn a_change_held_by_a_modal_panel_says_why() {
+        let mut e = FakeEngine::rig();
+        let mut app = picker_app(&mut e, "asio");
+        let now = app.now;
+        app.update(Msg::Coarse(1), &mut e, now).unwrap();
+        app.snapshot.panel_open = true;
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(has(&r, "waiting for the driver panel to close"));
+        assert!(
+            r[23].contains("driver panel open; close it to continue"),
+            "{}",
+            r[23]
+        );
+    }
+
+    #[test]
+    fn a_pending_change_without_a_panel_shows_no_wait() {
+        let mut e = FakeEngine::rig();
+        let mut app = picker_app(&mut e, "asio");
+        let now = app.now;
+        app.update(Msg::Coarse(1), &mut e, now).unwrap();
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(!has(&r, "waiting for the driver panel"));
+        assert!(r[23].contains("p panel"), "{}", r[23]);
     }
 }

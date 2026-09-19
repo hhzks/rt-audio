@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event;
 use rig_ui::app::{App, map_key};
-use rig_ui::model::{Engine, EngineError};
+use rig_ui::model::{Engine, EngineError, PanelOutcome};
 use rig_ui::theme::{ColorChoice, Env, GlyphChoice, Theme, pick_colors, pick_rich};
 use rig_ui::view::{self, Fx};
 
@@ -89,6 +89,18 @@ enum Fatal {
 struct Exit {
     lines: Vec<String>,
     forced: bool,
+}
+
+/// 0..3 for Opened, Modal, AlreadyOpen and NoDriverPanel, -1 for an error; for the C++ tests.
+#[unsafe(no_mangle)]
+pub extern "C" fn rt_tui_panel_probe(code: i32) -> i32 {
+    match crate::engine::panel_outcome(code) {
+        Ok(PanelOutcome::Opened) => 0,
+        Ok(PanelOutcome::Modal) => 1,
+        Ok(PanelOutcome::AlreadyOpen) => 2,
+        Ok(PanelOutcome::NoDriverPanel) => 3,
+        Err(_) => -1,
+    }
 }
 
 /// # Safety

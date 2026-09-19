@@ -747,3 +747,28 @@ TEST_CASE("reconfigure refuses while a modal driver panel is open", "[session]")
     rig.panelOpen = false;
     CHECK(s.reconfigure(nullConfig()) == ReconfigureResult::Applied);
 }
+
+TEST_CASE("a one-driver backend uses the id that is set for input and output", "[session]") {
+    LoopbackRig rig;
+    Session s(loopback(rig));
+    DeviceConfig c = nullConfig();
+    c.outputId = "drv";
+    s.open(Backend::Asio, c);
+    CHECK(s.config().inputId == "drv");
+    CHECK(s.config().outputId == "drv");
+    DeviceConfig next = nullConfig();
+    next.inputId = "other";
+    REQUIRE(s.reconfigure(next) == ReconfigureResult::Applied);
+    CHECK(s.config().inputId == "other");
+    CHECK(s.config().outputId == "other");
+}
+
+TEST_CASE("other backends keep an empty id empty", "[session]") {
+    LoopbackRig rig;
+    Session s(loopback(rig));
+    DeviceConfig c = nullConfig();
+    c.outputId = "phones";
+    s.open(Backend::Null, c);
+    CHECK(s.config().inputId.empty());
+    CHECK(s.config().outputId == "phones");
+}

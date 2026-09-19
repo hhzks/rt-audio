@@ -6,6 +6,7 @@
 #include <vector>
 
 extern "C" std::size_t rt_tui_layout_probe(std::uint64_t* out, std::size_t cap);
+extern "C" std::int32_t rt_tui_panel_probe(std::int32_t code);
 
 #define LAYOUT(T)   v.push_back(sizeof(T)); v.push_back(alignof(T))
 #define FIELD(T, f) v.push_back(offsetof(T, f))
@@ -119,6 +120,12 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_backend_caps, flags);
     FIELD(rt_backend_caps, display_name);
     FIELD(rt_backend_caps, notice);
+
+    for (int c : {RT_PANEL_OPENED, RT_PANEL_MODAL, RT_PANEL_ALREADY_OPEN, RT_PANEL_NONE})
+        v.push_back(static_cast<std::uint64_t>(c));
+    for (std::uint64_t c : {RT_CAP_RING, RT_CAP_ONE_DRIVER, RT_CAP_DRIVER_PANEL, RT_CAP_EXCLUSIVE_MODE,
+                            RT_CAP_RATE_FROM_DEVICE, RT_CAP_BLOCK_ZERO_PREFERRED, RT_CAP_BLOCK_ROUNDED})
+        v.push_back(c);
     return v;
 }
 
@@ -133,4 +140,13 @@ TEST_CASE("rust mirrors match the C header", "[ffi]") {
         CAPTURE(i);
         CHECK(actual[i] == expected[i]);
     }
+}
+
+// The probe answers 0..3 for Opened, Modal, AlreadyOpen, NoDriverPanel and -1 for an error.
+TEST_CASE("rust maps each panel result code to its outcome", "[ffi]") {
+    CHECK(rt_tui_panel_probe(RT_PANEL_OPENED) == 0);
+    CHECK(rt_tui_panel_probe(RT_PANEL_MODAL) == 1);
+    CHECK(rt_tui_panel_probe(RT_PANEL_ALREADY_OPEN) == 2);
+    CHECK(rt_tui_panel_probe(RT_PANEL_NONE) == 3);
+    CHECK(rt_tui_panel_probe(99) == -1);
 }

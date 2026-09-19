@@ -4,6 +4,7 @@
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
 #include "io/EngineCallback.h"
+#include "io/Utf8Args.h"
 #include "io/Utf8Console.h"
 
 #include <atomic>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace rt;
 
@@ -57,9 +59,10 @@ int main(int argc, char** argv) {
     double drive = 1.0, mix = 0.0, gateDb = -45.0;
     bool listOnly = false, bypass = false;
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        auto next = [&]() -> std::string { return (i + 1 < argc) ? argv[++i] : std::string{}; };
+    const std::vector<std::string> args = rt::utf8Args(argc, argv);
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string& arg = args[i];
+        auto next = [&]() -> std::string { return (i + 1 < args.size()) ? args[++i] : std::string{}; };
 
         if      (arg == "--list")      listOnly = true;
         else if (arg == "--backend")   backend = parseBackend(next());

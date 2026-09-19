@@ -2,9 +2,11 @@
 #include "io/WinString.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <future>
 #include <stdexcept>
+#include <thread>
 
 namespace rt {
 
@@ -32,6 +34,20 @@ static_assert(static_cast<long>(AsioSelector::SupportsTimeInfo) == kAsioSupports
 static_assert(static_cast<long>(AsioSelector::Overload) == kAsioOverload);
 
 namespace {
+
+// Counted before a callback reads active_, so releaseOnHost can wait for every callback in flight.
+std::atomic<int> callbacksRunning{0};
+
+struct CallbackScope {
+    CallbackScope() noexcept { callbacksRunning.fetch_add(1); }
+    ~CallbackScope() { callbacksRunning.fetch_sub(1); }
+    CallbackScope(const CallbackScope&) = delete;
+    CallbackScope& operator=(const CallbackScope&) = delete;
+};
+
+void waitForCallbacks() noexcept {
+    while (callbacksRunning.load() != 0) std::this_thread::yield();
+}
 
 void check(ASIOError e, const char* what) {
     if (e != ASE_OK) throw std::runtime_error(std::format("ASIO {} failed (error {})", what, e));
@@ -292,7 +308,8 @@ PanelResult AsioDevice::openControlPanel(const DeviceConfig& config) {
 }
 
 void AsioDevice::releaseOnHost() noexcept {
-    processing_.store(false, std::memory_order_release);
+    processing_.store(false);
+    waitForCallbacks();
     if (driver_) {
         if (running_.load()) driver_->stop();
         if (buffersCreated_) driver_->disposeBuffers();
@@ -304,6 +321,7 @@ void AsioDevice::releaseOnHost() noexcept {
     running_.store(false, std::memory_order_release);
     AsioDevice* self = this;
     active_.compare_exchange_strong(self, nullptr);
+    waitForCallbacks();
 }
 
 void AsioDevice::requestReset() noexcept {
@@ -334,7 +352,7 @@ void AsioDevice::refreshLatencies() noexcept {
 }
 
 void AsioDevice::process(long index) noexcept {
-    if (!processing_.load(std::memory_order_acquire)) return;
+    if (!processing_.load()) return;
     const int ch = config_.numChannels;
     for (int c = 0; c < ch; ++c) {
         const int in = std::min(c, inputs_ - 1);
@@ -350,20 +368,24 @@ void AsioDevice::process(long index) noexcept {
 }
 
 void AsioDevice::onBufferSwitch(long index, ASIOBool) {
+    const CallbackScope scope;
     if (AsioDevice* d = active_.load(std::memory_order_acquire)) d->process(index);
 }
 
 ASIOTime* AsioDevice::onBufferSwitchTimeInfo(ASIOTime* params, long index, ASIOBool) {
+    const CallbackScope scope;
     if (AsioDevice* d = active_.load(std::memory_order_acquire)) d->process(index);
     return params;
 }
 
 void AsioDevice::onSampleRateChanged(ASIOSampleRate rate) {
+    const CallbackScope scope;
     AsioDevice* d = active_.load(std::memory_order_acquire);
-    if (d && rate != d->requestedRate_.load(std::memory_order_relaxed)) d->requestReset();
+    if (d && std::abs(rate - d->requestedRate_.load(std::memory_order_relaxed)) > 1.0) d->requestReset();
 }
 
 long AsioDevice::onAsioMessage(long selector, long value, void*, double*) {
+    const CallbackScope scope;
     const AsioMessageReply r = handleAsioMessage(selector, value);
     AsioDevice* d = active_.load(std::memory_order_acquire);
     if (!d) return r.reply;

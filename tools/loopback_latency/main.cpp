@@ -6,6 +6,7 @@
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
+#include "io/Utf8Args.h"
 #include "io/Utf8Console.h"
 #include "common/WavIo.h"
 
@@ -218,11 +219,12 @@ int main(int argc, char** argv) {
     double ringBlocks = kDefaultRingBlocks;
 
     try {
-        for (int i = 1; i < argc; ++i) {
-            const std::string arg = argv[i];
+        const std::vector<std::string> args = rt::utf8Args(argc, argv);
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& arg = args[i];
             auto next = [&]() -> std::string {
-                if (i + 1 >= argc) throw std::runtime_error(arg + " expects a value");
-                return argv[++i];
+                if (i + 1 >= args.size()) throw std::runtime_error(arg + " expects a value");
+                return args[++i];
             };
             auto num = [&]() { return parseNumber(arg, next()); };
 
