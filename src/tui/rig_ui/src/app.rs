@@ -287,6 +287,9 @@ impl App {
                 if stopped && matches!(result, Ok(PanelOutcome::Opened | PanelOutcome::Modal)) {
                     self.stop_retried = true;
                 }
+                if matches!(result, Ok(PanelOutcome::Modal | PanelOutcome::AlreadyOpen)) {
+                    self.snapshot.panel_open = true;
+                }
                 let text = match result {
                     Ok(PanelOutcome::Opened) if stopped => PANEL_OPENED_STOPPED.to_owned(),
                     Ok(PanelOutcome::Opened) => PANEL_OPENED.to_owned(),
@@ -1393,6 +1396,21 @@ mod tests {
             run_due(&mut app, &mut e, at(1200)),
             "the change applies after the panel closes"
         );
+    }
+
+    #[test]
+    fn a_modal_result_marks_the_panel_open_before_the_next_ingest() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        e.config.backend = "asio".into();
+        e.panel_outcome = PanelOutcome::Modal;
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        app.update(Msg::Coarse(1), &mut e, t0).unwrap();
+        app.update(Msg::DriverPanel, &mut e, at(300)).unwrap();
+        assert_eq!(app.due(&e, at(300)), None, "no ingest happened yet");
+        assert_eq!(e.reconfigures.len(), 0);
+        app.update(Msg::QuitNow, &mut e, at(300)).unwrap();
+        assert!(app.quit && app.forced_exit);
     }
 
     #[test]
