@@ -2,6 +2,7 @@
 #include "io/WinString.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <future>
 #include <stdexcept>
@@ -380,7 +381,7 @@ ASIOTime* AsioDevice::onBufferSwitchTimeInfo(ASIOTime* params, long index, ASIOB
 void AsioDevice::onSampleRateChanged(ASIOSampleRate rate) {
     const CallbackScope scope;
     AsioDevice* d = active_.load(std::memory_order_acquire);
-    if (d && rate != d->requestedRate_.load(std::memory_order_relaxed)) d->requestReset();
+    if (d && std::abs(rate - d->requestedRate_.load(std::memory_order_relaxed)) > 1.0) d->requestReset();
 }
 
 long AsioDevice::onAsioMessage(long selector, long value, void*, double*) {

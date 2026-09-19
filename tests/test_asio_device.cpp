@@ -490,3 +490,17 @@ TEST_CASE("close waits for a running callback before it stops the driver", "[asi
     CHECK(fake.stops.load() == 1);
     CHECK(!fake.stoppedDuringCallback);
 }
+
+TEST_CASE("a reported rate within 1 Hz of the requested rate does not reset", "[asio]") {
+    FakeAsio fake;
+    AsioDevice dev(factoryFor(fake));
+    Half cb;
+    dev.open(fakeConfig(), &cb);
+    fake.callbacks->sampleRateDidChange(47999.98);
+    fake.callbacks->sampleRateDidChange(48000.9);
+    CHECK_NOTHROW(dev.start());
+    CHECK(dev.isRunning());
+    fake.callbacks->sampleRateDidChange(48001.5);
+    REQUIRE(waitFor([&] { return !dev.isRunning(); }));
+    CHECK(dev.status().lastError == "the ASIO driver requested a reset");
+}
