@@ -274,11 +274,16 @@ PanelResult AsioDevice::openControlPanel(const DeviceConfig& config) {
     auto result = std::make_shared<std::promise<ASIOError>>();
     std::future<ASIOError> done = result->get_future();
     panelBusy_.store(true, std::memory_order_release);
-    host_->post([this, result] {
-        const ASIOError e = driver_ ? driver_->controlPanel() : ASE_NotPresent;
+    try {
+        host_->post([this, result] {
+            const ASIOError e = driver_ ? driver_->controlPanel() : ASE_NotPresent;
+            panelBusy_.store(false, std::memory_order_release);
+            result->set_value(e);
+        });
+    } catch (...) {
         panelBusy_.store(false, std::memory_order_release);
-        result->set_value(e);
-    });
+        throw;
+    }
     if (done.wait_for(kPanelWait) != std::future_status::ready) return PanelResult::Modal;
     const ASIOError e = done.get();
     if (e == ASE_OK) return PanelResult::Opened;
