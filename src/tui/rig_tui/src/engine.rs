@@ -81,6 +81,18 @@ fn entry(d: &RtDeviceInfo) -> DeviceEntry {
     }
 }
 
+pub fn panel_outcome(code: i32) -> Result<PanelOutcome, EngineError> {
+    match code {
+        ffi::RT_PANEL_OPENED => Ok(PanelOutcome::Opened),
+        ffi::RT_PANEL_MODAL => Ok(PanelOutcome::Modal),
+        ffi::RT_PANEL_ALREADY_OPEN => Ok(PanelOutcome::AlreadyOpen),
+        ffi::RT_PANEL_NONE => Ok(PanelOutcome::NoDriverPanel),
+        other => Err(EngineError::Internal(format!(
+            "unknown driver panel result {other}"
+        ))),
+    }
+}
+
 fn latency_status_from(raw: &RtLatencyStatus) -> LatencyStatus {
     let state = match raw.state {
         ffi::RT_LAT_RUNNING => LatencyState::Running,
@@ -405,12 +417,7 @@ impl Engine for FfiEngine {
         let mut result: i32 = -1;
         // SAFETY: `self.s` is live and `result` is writable.
         self.check(unsafe { ffi::rt_session_control_panel(self.s, &mut result) })?;
-        Ok(match result {
-            ffi::RT_PANEL_MODAL => PanelOutcome::Modal,
-            ffi::RT_PANEL_ALREADY_OPEN => PanelOutcome::AlreadyOpen,
-            ffi::RT_PANEL_NONE => PanelOutcome::NoDriverPanel,
-            _ => PanelOutcome::Opened,
-        })
+        panel_outcome(result)
     }
 
     fn latency_enter(&mut self) -> Result<(), EngineError> {

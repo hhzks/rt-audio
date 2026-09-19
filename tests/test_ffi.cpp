@@ -1,4 +1,5 @@
 #include "ffi/rt_ffi.h"
+#include "ffi/CapsFlags.h"
 #include "ffi/DeviceInfoCopy.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -380,4 +381,14 @@ TEST_CASE("latency calls check their arguments and state", "[ffi]") {
     CHECK(rt_session_latency_status(s, &st) == RT_OK);
     CHECK(st.latency_mode == 0);
     rt_session_destroy(s);
+}
+
+TEST_CASE("each backend packs its caps into the documented flags", "[ffi]") {
+    using rt::Backend;
+    CHECK(rt::capsFlags(rt::backendCaps(Backend::Wasapi)) ==
+          (RT_CAP_RING | RT_CAP_EXCLUSIVE_MODE | RT_CAP_RATE_FROM_DEVICE | RT_CAP_BLOCK_ROUNDED));
+    CHECK(rt::capsFlags(rt::backendCaps(Backend::Asio)) ==
+          (RT_CAP_ONE_DRIVER | RT_CAP_DRIVER_PANEL | RT_CAP_BLOCK_ZERO_PREFERRED | RT_CAP_BLOCK_ROUNDED));
+    CHECK(rt::capsFlags(rt::backendCaps(Backend::Alsa)) == RT_CAP_RING);
+    CHECK(rt::capsFlags(rt::backendCaps(Backend::Null)) == 0u);
 }

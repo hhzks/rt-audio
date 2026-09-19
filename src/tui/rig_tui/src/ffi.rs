@@ -20,6 +20,7 @@ pub const RT_RECONF_APPLIED: i32 = 0;
 pub const RT_RECONF_ROLLED_BACK: i32 = 1;
 pub const RT_RECONF_STOPPED: i32 = 2;
 
+pub const RT_PANEL_OPENED: i32 = 0;
 pub const RT_PANEL_MODAL: i32 = 1;
 pub const RT_PANEL_ALREADY_OPEN: i32 = 2;
 pub const RT_PANEL_NONE: i32 = 3;
@@ -269,5 +270,25 @@ pub fn layout_values() -> Vec<u64> {
         control_passed, chain_valid, clipped, kept, discarded, measured_ms, spread_ms,
         computed_ms, chain_measured_ms, chain_reported_frames, direct, message);
     layout!(v, RtBackendCaps; flags, display_name, notice);
+    for c in [
+        RT_PANEL_OPENED,
+        RT_PANEL_MODAL,
+        RT_PANEL_ALREADY_OPEN,
+        RT_PANEL_NONE,
+    ] {
+        v.push(c as u64);
+    }
+    v.extend(
+        [
+            RT_CAP_RING,
+            RT_CAP_ONE_DRIVER,
+            RT_CAP_DRIVER_PANEL,
+            RT_CAP_EXCLUSIVE_MODE,
+            RT_CAP_RATE_FROM_DEVICE,
+            RT_CAP_BLOCK_ZERO_PREFERRED,
+            RT_CAP_BLOCK_ROUNDED,
+        ]
+        .map(u64::from),
+    );
     v
 }
