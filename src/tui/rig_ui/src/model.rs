@@ -80,6 +80,48 @@ pub struct DeviceEntry {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct Caps {
+    pub ring: bool,
+    pub one_driver: bool,
+    pub driver_panel: bool,
+    pub exclusive_mode: bool,
+    pub rate_from_device: bool,
+    pub block_zero_preferred: bool,
+    pub block_rounded: bool,
+    pub display_name: String,
+    pub notice: String,
+}
+
+impl Caps {
+    /// A copy of `backendCaps` in `DeviceFactory.cpp`, for `FakeEngine` and tests.
+    pub fn fake_for(backend: &str) -> Caps {
+        let mut c = Caps {
+            display_name: backend.to_uppercase(),
+            ..Caps::default()
+        };
+        match backend {
+            "wasapi" => {
+                c.ring = true;
+                c.exclusive_mode = true;
+                c.rate_from_device = true;
+                c.block_rounded = true;
+            }
+            "asio" => {
+                c.one_driver = true;
+                c.driver_panel = true;
+                c.block_zero_preferred = true;
+                c.block_rounded = true;
+                c.display_name = "ASIO\u{ae}".into();
+                c.notice = crate::ASIO_NOTICE.into();
+            }
+            "alsa" => c.ring = true,
+            _ => {}
+        }
+        c
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Config {
     pub backend: String,
     pub input: String,
@@ -120,6 +162,14 @@ pub enum Outcome {
     Applied,
     RolledBack(String),
     Stopped(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelOutcome {
+    Opened,
+    Modal,
+    AlreadyOpen,
+    NoDriverPanel,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -197,6 +247,7 @@ pub struct Snapshot {
     pub out_peak: Vec<f32>,
     pub params: Vec<Vec<f64>>,
     pub running: bool,
+    pub panel_open: bool,
     pub device_error: String,
 }
 
@@ -219,6 +270,7 @@ impl Snapshot {
                 .map(|s| s.params.iter().map(|p| p.default).collect())
                 .collect(),
             running: true,
+            panel_open: false,
             device_error: String::new(),
         }
     }
@@ -258,7 +310,9 @@ pub trait Engine {
     fn bucket_upper_ns(&self, bucket: usize) -> u64;
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
+    fn caps(&self) -> Caps;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
+    fn control_panel(&mut self) -> Result<PanelOutcome, EngineError>;
     fn latency_enter(&mut self) -> Result<(), EngineError>;
     fn latency_leave(&mut self) -> Result<(), EngineError>;
     fn latency_start(&mut self, kind: LatencyKind, s: LatencySettings) -> Result<(), EngineError>;
@@ -318,6 +372,8 @@ pub struct FakeEngine {
     pub latency_script: RefCell<VecDeque<LatencyStatus>>,
     pub latency_calls: Vec<String>,
     pub fail_latency_start: Option<EngineError>,
+    pub panel_opens: usize,
+    pub panel_outcome: PanelOutcome,
 }
 
 fn entry(id: &str, name: &str, inputs: i32, outputs: i32) -> DeviceEntry {
@@ -423,6 +479,8 @@ impl FakeEngine {
             latency_script: RefCell::new(VecDeque::new()),
             latency_calls: Vec::new(),
             fail_latency_start: None,
+            panel_opens: 0,
+            panel_outcome: PanelOutcome::Opened,
         }
     }
 
@@ -506,6 +564,10 @@ impl Engine for FakeEngine {
         &self.config
     }
 
+    fn caps(&self) -> Caps {
+        Caps::fake_for(&self.config.backend)
+    }
+
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
         self.reconfigures.push(next.clone());
         if !self.fails(next) {
@@ -523,6 +585,19 @@ impl Engine for FakeEngine {
             ));
         }
         Ok(self.stop("could not open the new config; could not restore the previous config"))
+    }
+
+    fn control_panel(&mut self) -> Result<PanelOutcome, EngineError> {
+        if !self.caps().driver_panel {
+            return Err(EngineError::State(
+                "this backend has no driver panel".into(),
+            ));
+        }
+        self.panel_opens += 1;
+        if self.panel_outcome == PanelOutcome::Modal {
+            self.next.panel_open = true;
+        }
+        Ok(self.panel_outcome)
     }
 
     fn latency_enter(&mut self) -> Result<(), EngineError> {

@@ -75,6 +75,40 @@ keys; `q q` quits.
   protection against underruns. Measure each value with `m`, and look at the underrun count in
   the header.
 
+## ASIO® (Windows)
+
+<img src="assets/asio-compatible.svg" width="120" alt="ASIO Compatible logo">
+
+rt-audio can use ASIO® drivers on Windows. An ASIO driver gives input and output in one callback
+on one clock, so the capture ring, the resampler and the drift loop are not used, and buffers
+below the WASAPI minimum are possible.
+
+The ASIO backend is not in the normal build. To build it:
+
+```
+cmake --preset windows-clang-cl-asio
+cmake --build --preset windows-clang-cl-asio
+```
+
+CMake downloads the Steinberg ASIO SDK 2.3.4 and checks its SHA-256. The SDK is used under GPLv3,
+so the binaries built with the ASIO backend are covered by GPLv3. The source in this repository
+stays MIT. Each release has a separate `-asio` Windows package with the licence texts and the SDK
+files that it uses.
+
+Run with `--backend asio`. In `rt_rig`, the picker shows one `driver` field, and `p` opens the
+driver's settings panel. Block 0 means the driver's preferred buffer size. A buffer size change in
+the driver panel takes effect only when the block is 0; an explicit block size is requested again
+when the device reopens.
+
+With ASIO4ALL on onboard audio:
+- In the ASIO4ALL panel, activate only the output and the input that you use. With all devices
+  active, the stream may not start.
+- Close the Windows Sound control panel and the Realtek Audio Console. They can hold the input, and
+  ASIO4ALL then removes it without an error.
+
+ASIO is a registered trademark of Steinberg Media Technologies GmbH. The ASIO Compatible logo is not
+covered by the MIT licence. It is used under the Steinberg ASIO usage guidelines.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

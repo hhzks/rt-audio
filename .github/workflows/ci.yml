@@ -91,3 +91,35 @@ jobs:
 
       - name: Layering guard
         run: cmake --build build/windows-clang --target check_layering
+
+  windows-asio:
+    name: Windows / clang-cl + ASIO (GPLv3 build)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Add LLVM to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8
+
+      - name: Install Rust toolchain
+        working-directory: src/tui
+        run: rustup toolchain install
+
+      - name: Cache the ASIO SDK
+        uses: actions/cache@v4
+        with:
+          path: build/windows-clang-asio/_deps/asiosdk-2.3.4
+          key: asio-sdk-${{ hashFiles('cmake/AsioSdk.cmake') }}
+
+      - name: Configure
+        run: cmake --preset windows-clang-cl-asio
+
+      - name: Build
+        run: cmake --build --preset windows-clang-cl-asio
+
+      - name: Test
+        run: ctest --test-dir build/windows-clang-asio --output-on-failure

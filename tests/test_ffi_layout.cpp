@@ -63,6 +63,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_snapshot, params);
     FIELD(rt_snapshot, channels);
     FIELD(rt_snapshot, running);
+    FIELD(rt_snapshot, panel_open);
     FIELD(rt_snapshot, device_error);
 
     LAYOUT(rt_device_info);
@@ -113,6 +114,11 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_latency_status, chain_reported_frames);
     FIELD(rt_latency_status, direct);
     FIELD(rt_latency_status, message);
+
+    LAYOUT(rt_backend_caps);
+    FIELD(rt_backend_caps, flags);
+    FIELD(rt_backend_caps, display_name);
+    FIELD(rt_backend_caps, notice);
     return v;
 }
 

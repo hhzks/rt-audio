@@ -37,8 +37,13 @@ enum ColorArg {
     version,
     about = "rt-rig: play through the rt-audio engine"
 )]
+#[cfg_attr(feature = "asio", command(after_help = rig_ui::ASIO_NOTICE))]
 struct Args {
     /// wasapi | alsa | null (default: platform default)
+    #[cfg_attr(
+        feature = "asio",
+        arg(help = "wasapi | asio | alsa | null (default: platform default)")
+    )]
     #[arg(long)]
     backend: Option<String>,
     /// capture device id (default: system default)
@@ -51,6 +56,12 @@ struct Args {
     #[arg(long, default_value_t = 48000.0)]
     rate: f64,
     /// requested block size in frames (0 = driver minimum)
+    #[cfg_attr(
+        feature = "asio",
+        arg(
+            help = "requested block size in frames (0 = driver minimum; ASIO\u{ae}: driver preferred)"
+        )
+    )]
     #[arg(long, default_value_t = 0)]
     block: i32,
     /// WASAPI exclusive mode
@@ -73,6 +84,11 @@ struct Args {
 enum Fatal {
     Engine(EngineError),
     Terminal(io::Error),
+}
+
+struct Exit {
+    lines: Vec<String>,
+    forced: bool,
 }
 
 /// # Safety
@@ -159,11 +175,16 @@ fn run(args: &Args) -> i32 {
     };
     let result = ui_loop(&mut terminal, &mut engine, &theme, args.fps);
     ratatui::restore();
-    drop(engine);
+    if result.as_ref().is_ok_and(|exit| exit.forced) {
+        std::mem::forget(engine);
+        eprintln!("rt-rig: the driver panel was open; the driver was not released");
+    } else {
+        drop(engine);
+    }
 
     match result {
-        Ok(lines) => {
-            for line in lines {
+        Ok(exit) => {
+            for line in exit.lines {
                 println!("{line}");
             }
             0
@@ -184,7 +205,7 @@ fn ui_loop(
     engine: &mut FfiEngine,
     theme: &Theme,
     fps: u32,
-) -> Result<Vec<String>, Fatal> {
+) -> Result<Exit, Fatal> {
     let frame = Duration::from_secs(1) / fps;
     let mut app = App::new(&*engine, Instant::now());
     let mut fx = Fx::default();
@@ -200,10 +221,13 @@ fn ui_loop(
                     .map_err(Fatal::Engine)?;
             }
             if app.quit {
-                return Ok([app.quit_line(&*engine), app.quit_table()]
-                    .into_iter()
-                    .flatten()
-                    .collect());
+                return Ok(Exit {
+                    lines: [app.quit_line(&*engine), app.quit_table()]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                    forced: app.forced_exit,
+                });
             }
         }
         if let Some(cfg) = app.due(&*engine, Instant::now()) {

@@ -63,6 +63,7 @@ public:
     ReconfigureResult reconfigure(const DeviceConfig& next);
     std::vector<DeviceInfo> enumerate();
     void stop() noexcept;
+    PanelResult controlPanel();
     bool isOpen() const noexcept { return opened_; }
 
     void latencyEnter();

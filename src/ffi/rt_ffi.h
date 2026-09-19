@@ -26,6 +26,19 @@ extern "C" {
 #define RT_RECONF_ROLLED_BACK 1
 #define RT_RECONF_STOPPED     2
 
+#define RT_PANEL_OPENED       0
+#define RT_PANEL_MODAL        1
+#define RT_PANEL_ALREADY_OPEN 2
+#define RT_PANEL_NONE         3   /* the driver has no panel */
+
+#define RT_CAP_RING                  1u
+#define RT_CAP_ONE_DRIVER            2u   /* one id for input and output */
+#define RT_CAP_DRIVER_PANEL          4u
+#define RT_CAP_EXCLUSIVE_MODE        8u   /* a Mode field; exclusive fixes the block */
+#define RT_CAP_RATE_FROM_DEVICE     16u
+#define RT_CAP_BLOCK_ZERO_PREFERRED 32u   /* block 0 = the driver's preferred size */
+#define RT_CAP_BLOCK_ROUNDED        64u
+
 #define RT_ID_BYTES   256
 #define RT_NAME_BYTES 128
 
@@ -84,6 +97,7 @@ typedef struct {
     double   params[RT_MAX_STRIPS][RT_MAX_PARAMS]; /* engine-held values, post-clamp */
     int32_t  channels;
     uint8_t  running;
+    uint8_t  panel_open;                     /* a modal driver panel is open */
     char     device_error[256];                 /* empty unless the backend reported one */
 } rt_snapshot;
 
@@ -104,6 +118,12 @@ typedef struct {
     uint8_t exclusive;
     double  ring_blocks;
 } rt_config_desc;
+
+typedef struct {
+    uint32_t flags;               /* RT_CAP_* */
+    char     display_name[16];    /* UTF-8 */
+    char     notice[128];         /* empty when the backend has none */
+} rt_backend_caps;
 
 typedef struct {
     int32_t repeats;                /* 1..RT_LAT_MAX_REPEATS */
@@ -144,7 +164,9 @@ int32_t     rt_session_snapshot(rt_session* s, rt_snapshot* out);
 
 int32_t     rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total);
 int32_t     rt_session_config(const rt_session* s, rt_config_desc* out);
+int32_t     rt_session_caps(const rt_session* s, rt_backend_caps* out);
 int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
+int32_t     rt_session_control_panel(rt_session* s, int32_t* result);
 
 int32_t     rt_session_latency_enter(rt_session* s);
 int32_t     rt_session_latency_leave(rt_session* s);

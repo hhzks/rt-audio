@@ -1,4 +1,8 @@
-corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES rig_tui LOCKED)
+if(RT_ASIO)
+    corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES rig_tui LOCKED FEATURES asio)
+else()
+    corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES rig_tui LOCKED)
+endif()
 corrosion_link_libraries(rig_tui rt_ffi)
 
 add_executable(rt_rig main.cpp)

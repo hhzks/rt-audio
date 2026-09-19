@@ -6,6 +6,7 @@
 #include "dsp/NoiseGate.h"
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
+#include "io/Utf8Console.h"
 #include "common/WavIo.h"
 
 #include <algorithm>
@@ -45,20 +46,23 @@ private:
 
 Backend parseBackend(const std::string& s) {
     if (s == "wasapi") return Backend::Wasapi;
+    if (s == "asio")   return Backend::Asio;
     if (s == "alsa")   return Backend::Alsa;
     if (s == "null")   return Backend::Null;
     return Backend::Default;
 }
 
 void printUsage() {
+    const bool asio = backendAvailable("asio");
     std::cout <<
         "loopback_latency -- measure physical round-trip audio latency\n\n"
         "  --list                    enumerate devices and exit\n"
         "  --in <id>                 capture device id      (REQUIRED)\n"
         "  --out <id>                render device id       (REQUIRED)\n"
-        "  --backend <name>          wasapi | alsa | null   (default: platform default)\n"
+        "  --backend <name>          " << backendList() << "   (default: platform default)\n"
         "  --rate <hz>               requested sample rate (default: 48000)\n"
-        "  --block <frames>          requested block size (default: driver minimum)\n"
+        "  --block <frames>          requested block size (default: driver minimum"
+                                  << (asio ? "; ASIO®: driver preferred" : "") << ")\n"
         "  --exclusive               WASAPI exclusive mode\n"
         "  --ring <blocks>           capture ring margin, 1.0 to 2.0 (default: 2.0)\n"
         "  --repeats <n>             sweep repeats (default: 5)\n"
@@ -73,6 +77,7 @@ void printUsage() {
         "  --json <path>             machine-readable result\n"
         "  --save-capture <path>     dump the last captured sweep as WAV\n"
         "  --help\n";
+    if (asio) std::cout << "\n" << kAsioTrademarkNotice << "\n";
 }
 
 std::string toLowerCopy(std::string s) {
@@ -200,6 +205,7 @@ double parseNumber(const std::string& flag, const std::string& v) {
 } // namespace
 
 int main(int argc, char** argv) {
+    [[maybe_unused]] rt::Utf8Console console;
     std::string inId, outId, jsonPath, saveCapturePath;
     Backend backend = Backend::Default;
     double sampleRate = 48000.0;
@@ -309,6 +315,7 @@ int main(int argc, char** argv) {
 
         device->open(devCfg, &callback);
         const auto st = device->status();
+        const BackendCaps caps = backendCaps(backend);
 
         probe.prepare(st.sampleRate, st.blockFrames, st.numChannels, sweepCfg);
         if (probe.reference().empty()) {
@@ -320,7 +327,9 @@ int main(int argc, char** argv) {
 
         std::cout << "device       : in \"" << inName << "\"  out \"" << outName << "\"\n"
                   << "               " << st.backendName << ", " << st.sampleRate << " Hz, "
-                  << st.blockFrames << " frames, ring " << ringBlocks << " blocks\n";
+                  << st.blockFrames << " frames";
+        if (caps.ring) std::cout << ", ring " << ringBlocks << " blocks";
+        std::cout << "\n";
 
         PhaseResult phaseA;
         {
@@ -459,8 +468,10 @@ int main(int argc, char** argv) {
             f << "{\n"
               << "  \"device\": \"" << escapeJson(st.backendName) << "\",\n"
               << "  \"sampleRate\": " << st.sampleRate << ",\n"
-              << "  \"blockFrames\": " << st.blockFrames << ",\n"
-              << "  \"ringBlocks\": " << ringBlocks << ",\n"
+              << "  \"blockFrames\": " << st.blockFrames << ",\n";
+            f << "  \"ringBlocks\": ";
+            if (caps.ring) f << ringBlocks; else f << "null";
+            f << ",\n"
               << "  \"computedMs\": " << computedMs << ",\n"
               << "  \"measuredMs\": " << measuredMs << ",\n"
               << "  \"spreadMs\": " << spreadMs << ",\n"

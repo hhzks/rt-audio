@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -199,6 +200,21 @@ TEST_CASE("config reports the requested values", "[ffi]") {
     rt_session_destroy(s);
 }
 
+TEST_CASE("the backend caps come from the session backend", "[ffi]") {
+    rt_backend_caps caps{};
+    CHECK(rt_session_caps(nullptr, &caps) == RT_E_ARG);
+    rt_session* s = rt_session_create();
+    CHECK(rt_session_caps(s, nullptr) == RT_E_ARG);
+    CHECK(rt_session_caps(s, &caps) == RT_E_STATE);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    REQUIRE(rt_session_caps(s, &caps) == RT_OK);
+    CHECK(caps.flags == 0u);
+    CHECK(std::string(caps.display_name) == "NULL");
+    CHECK(caps.notice[0] == '\0');
+    rt_session_destroy(s);
+}
+
 TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     rt_session* s = rt_session_create();
     rt_open_config cfg = nullConfig();
@@ -231,6 +247,24 @@ TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     CHECK(std::string(buf).find("backend") != std::string::npos);
     cfg.backend = "nosuch";
     CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("the driver panel call checks its arguments and state", "[ffi]") {
+    int32_t result = -1;
+    CHECK(rt_session_control_panel(nullptr, &result) == RT_E_ARG);
+    rt_session* s = rt_session_create();
+    CHECK(rt_session_control_panel(s, nullptr) == RT_E_ARG);
+    CHECK(rt_session_control_panel(s, &result) == RT_E_STATE);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_control_panel(s, &result) == RT_E_STATE);
+    char buf[128];
+    rt_session_last_error(s, buf, sizeof buf);
+    CHECK(std::string(buf) == "this backend has no driver panel");
+    auto snap = std::make_unique<rt_snapshot>();
+    REQUIRE(rt_session_snapshot(s, snap.get()) == RT_OK);
+    CHECK(snap->panel_open == 0);
     rt_session_destroy(s);
 }
 

@@ -13,6 +13,14 @@
       }
     },
     {
+      "name": "windows-clang-cl-asio",
+      "displayName": "Windows / clang-cl + ASIO (GPLv3 build)",
+      "description": "Downloads the Steinberg ASIO SDK 2.3.4. The binaries are covered by GPLv3.",
+      "inherits": "windows-clang-cl",
+      "binaryDir": "${sourceDir}/build/windows-clang-asio",
+      "cacheVariables": { "RT_ASIO": "ON" }
+    },
+    {
       "name": "windows-msvc",
       "displayName": "Windows / MSVC (UNSUPPORTED)",
       "description": "Kept only so the C++26 diagnostic is discoverable. MSVC has no /std:c++26 and will fail to configure.",
@@ -31,6 +39,7 @@
   ],
   "buildPresets": [
     { "name": "windows-clang-cl", "configurePreset": "windows-clang-cl" },
+    { "name": "windows-clang-cl-asio", "configurePreset": "windows-clang-cl-asio" },
     { "name": "windows-msvc", "configurePreset": "windows-msvc", "configuration": "RelWithDebInfo" },
     { "name": "linux", "configurePreset": "linux" }
   ]

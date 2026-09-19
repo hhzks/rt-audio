@@ -78,12 +78,31 @@ TEST_CASE("round trip is within half an LSB", "[core]") {
     }
 }
 
-TEST_CASE("float32 is a pass-through", "[core]") {
+TEST_CASE("float32 output is clamped to full scale", "[core]") {
     const float in[] = { -2.0f, -0.5f, 0.0f, 0.5f, 3.0f };
+    const float want[] = { -1.0f, -0.5f, 0.0f, 0.5f, 1.0f };
     float mid[5] = {}, out[5] = {};
     fromFloat(in, mid, 5, SampleFormat::Float32);
     toFloat(mid, out, 5, SampleFormat::Float32);
-    for (int i = 0; i < 5; ++i) CHECK_THAT(out[i], WithinAbs(static_cast<double>(in[i]), 0.0));
+    for (int i = 0; i < 5; ++i) CHECK(out[i] == want[i]);
+}
+
+TEST_CASE("a stride reads and writes every n-th float", "[core]") {
+    for (SampleFormat f : { SampleFormat::Int16, SampleFormat::Int24, SampleFormat::Int32,
+                            SampleFormat::Float32 }) {
+        CAPTURE(f);
+        const float inter[] = { 0.5f, 9.0f, -0.25f, 9.0f, 0.125f, 9.0f };
+        std::vector<unsigned char> buf(3 * static_cast<std::size_t>(bytesPerSample(f)));
+        fromFloat(inter, buf.data(), 3, f, 2);
+        float back[6] = { 7.0f, 7.0f, 7.0f, 7.0f, 7.0f, 7.0f };
+        toFloat(buf.data(), back + 1, 3, f, 2);
+        CHECK(back[0] == 7.0f);
+        CHECK(back[1] == 0.5f);
+        CHECK(back[2] == 7.0f);
+        CHECK(back[3] == -0.25f);
+        CHECK(back[4] == 7.0f);
+        CHECK(back[5] == 0.125f);
+    }
 }
 
 // 24-bit is three packed bytes with no native type; sign extension of bit 23 is

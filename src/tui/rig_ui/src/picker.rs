@@ -1,4 +1,4 @@
-use crate::model::{Config, DeviceEntry};
+use crate::model::{Caps, Config, DeviceEntry};
 
 pub const BLOCKS: [i32; 8] = [0, 32, 64, 128, 256, 512, 1024, 2048];
 pub const RATES: [f64; 4] = [44100.0, 48000.0, 88200.0, 96000.0];
@@ -47,6 +47,7 @@ pub struct Picker {
     pub edited: Config,
     pub cursor: usize,
     pub status: PickerStatus,
+    pub caps: Caps,
 }
 
 pub fn khz(rate: f64) -> String {
@@ -90,13 +91,14 @@ fn step_list<T: Copy + PartialOrd>(list: &[T], current: T, dir: i8) -> T {
 }
 
 impl Picker {
-    pub fn new(config: Config, devices: Result<Vec<DeviceEntry>, String>) -> Self {
+    pub fn new(config: Config, caps: Caps, devices: Result<Vec<DeviceEntry>, String>) -> Self {
         let mut p = Picker {
             devices: Vec::new(),
             list_error: None,
             edited: config,
             cursor: 0,
             status: PickerStatus::Idle,
+            caps,
         };
         p.set_devices(devices);
         p
@@ -115,13 +117,20 @@ impl Picker {
         }
     }
 
-    pub fn is_wasapi(&self) -> bool {
-        self.edited.backend == "wasapi"
+    pub fn field_name(&self, field: Field) -> &'static str {
+        if self.caps.one_driver && field == Field::Input {
+            "driver"
+        } else {
+            field.name()
+        }
     }
 
     pub fn visible_fields(&self) -> Vec<Field> {
+        if self.caps.one_driver {
+            return vec![Field::Input, Field::Block, Field::Rate, Field::Ring];
+        }
         let mut f = vec![Field::Input, Field::Output];
-        if self.is_wasapi() {
+        if self.caps.exclusive_mode {
             f.push(Field::Mode);
         }
         f.push(Field::Block);
@@ -132,9 +141,9 @@ impl Picker {
 
     pub fn read_only(&self, field: Field) -> bool {
         match field {
-            Field::Rate => self.is_wasapi(),
-            Field::Block => self.is_wasapi() && self.edited.exclusive,
-            Field::Ring => self.edited.backend == "null",
+            Field::Rate => self.caps.rate_from_device,
+            Field::Block => self.caps.exclusive_mode && self.edited.exclusive,
+            Field::Ring => !self.caps.ring,
             _ => false,
         }
     }
@@ -182,12 +191,20 @@ impl Picker {
             .iter()
             .find(|d| if output { d.default_out } else { d.default_in })
             .map(|d| d.name.as_str());
-        let mut list = vec![Choice {
-            id: String::new(),
-            label: match default_name {
+        let first = if self.caps.one_driver {
+            match self.devices.first() {
+                Some(d) => format!("first driver ({})", d.name),
+                None => "first driver".into(),
+            }
+        } else {
+            match default_name {
                 Some(n) => format!("System default ({n})"),
                 None => "System default".into(),
-            },
+            }
+        };
+        let mut list = vec![Choice {
+            id: String::new(),
+            label: first,
         }];
         let listed: Vec<&DeviceEntry> = self
             .devices
@@ -231,6 +248,9 @@ impl Picker {
                     self.edited.output = id;
                 } else {
                     self.edited.input = id;
+                }
+                if self.caps.one_driver {
+                    self.edited.output = self.edited.input.clone();
                 }
                 true
             }
@@ -285,9 +305,15 @@ impl Picker {
                 mode.to_owned()
             }
             Field::Block if self.read_only(Field::Block) => "device minimum".into(),
-            Field::Block if self.edited.block == 0 => "driver minimum".into(),
+            Field::Block if self.edited.block == 0 => {
+                if self.caps.block_zero_preferred {
+                    "driver preferred".into()
+                } else {
+                    "driver minimum".into()
+                }
+            }
             Field::Block => {
-                let rate = if self.is_wasapi() {
+                let rate = if self.caps.rate_from_device {
                     device_rate
                 } else {
                     self.edited.rate
@@ -299,7 +325,7 @@ impl Picker {
                 };
                 format!("{} fr{sep}{ms:.2} ms", self.edited.block)
             }
-            Field::Rate => khz(if self.is_wasapi() {
+            Field::Rate => khz(if self.caps.rate_from_device {
                 device_rate
             } else {
                 self.edited.rate
@@ -311,8 +337,8 @@ impl Picker {
 
     pub fn note(&self, field: Field) -> &'static str {
         match field {
-            Field::Rate if self.is_wasapi() => "set by the device mix format",
-            Field::Block if self.is_wasapi() && !self.read_only(Field::Block) => {
+            Field::Rate if self.caps.rate_from_device => "set by the device mix format",
+            Field::Block if self.caps.block_rounded && !self.read_only(Field::Block) => {
                 "the driver can round it"
             }
             Field::Ring if !self.read_only(Field::Ring) => "lower: less delay, more risk",
@@ -361,9 +387,14 @@ mod tests {
         list.iter().map(|c| c.id.as_str()).collect()
     }
 
+    fn picker(c: Config, devices: Result<Vec<DeviceEntry>, String>) -> Picker {
+        let caps = Caps::fake_for(&c.backend);
+        Picker::new(c, caps, devices)
+    }
+
     #[test]
     fn device_lists_filter_by_direction_with_default_first() {
-        let p = Picker::new(config("wasapi"), Ok(devices()));
+        let p = picker(config("wasapi"), Ok(devices()));
         assert_eq!(ids(&p.choices(Field::Input)), ["", "mic", "usb"]);
         assert_eq!(ids(&p.choices(Field::Output)), ["", "phones", "usb"]);
         assert_eq!(p.choices(Field::Input)[0].label, "System default (Mic)");
@@ -379,7 +410,7 @@ mod tests {
     fn a_missing_id_is_listed_until_stepped_away() {
         let mut c = config("wasapi");
         c.input = "gone".into();
-        let mut p = Picker::new(c, Ok(devices()));
+        let mut p = picker(c, Ok(devices()));
         assert_eq!(ids(&p.choices(Field::Input)), ["", "gone", "mic", "usb"]);
         assert_eq!(p.label(Field::Input, 48000.0, " · "), "(missing) gone");
         assert!(p.step(1));
@@ -389,7 +420,7 @@ mod tests {
 
     #[test]
     fn device_steps_stop_at_the_ends() {
-        let mut p = Picker::new(config("null"), Ok(devices()));
+        let mut p = picker(config("null"), Ok(devices()));
         assert!(!p.step(-1));
         assert!(p.step(1));
         assert!(p.step(1));
@@ -399,7 +430,7 @@ mod tests {
 
     #[test]
     fn wasapi_rules() {
-        let mut p = Picker::new(config("wasapi"), Ok(devices()));
+        let mut p = picker(config("wasapi"), Ok(devices()));
         assert_eq!(
             p.visible_fields(),
             [
@@ -435,7 +466,7 @@ mod tests {
 
     #[test]
     fn alsa_hides_mode_and_steps_rate() {
-        let mut p = Picker::new(config("alsa"), Ok(devices()));
+        let mut p = picker(config("alsa"), Ok(devices()));
         assert_eq!(
             p.visible_fields(),
             [
@@ -457,7 +488,7 @@ mod tests {
 
     #[test]
     fn block_steps_snap_off_list_values_and_stop_at_the_ends() {
-        let mut p = Picker::new(config("null"), Ok(devices()));
+        let mut p = picker(config("null"), Ok(devices()));
         p.select(Field::Block);
         assert_eq!(p.label(Field::Block, 48000.0, " · "), "128 fr · 2.67 ms");
         p.edited.block = 100;
@@ -477,7 +508,7 @@ mod tests {
 
     #[test]
     fn ring_steps_by_a_quarter_block_and_stops_at_the_ends() {
-        let mut p = Picker::new(config("alsa"), Ok(devices()));
+        let mut p = picker(config("alsa"), Ok(devices()));
         p.select(Field::Ring);
         assert_eq!(p.label(Field::Ring, 48000.0, " · "), "2 blocks");
         assert_eq!(p.note(Field::Ring), "lower: less delay, more risk");
@@ -497,7 +528,7 @@ mod tests {
 
     #[test]
     fn null_shows_the_ring_as_read_only() {
-        let p = Picker::new(config("null"), Ok(devices()));
+        let p = picker(config("null"), Ok(devices()));
         assert!(p.visible_fields().contains(&Field::Ring));
         assert!(p.read_only(Field::Ring));
         assert_eq!(p.label(Field::Ring, 48000.0, " · "), "n/a");
@@ -506,7 +537,7 @@ mod tests {
 
     #[test]
     fn a_list_error_leaves_only_the_default() {
-        let mut p = Picker::new(config("null"), Err("boom".into()));
+        let mut p = picker(config("null"), Err("boom".into()));
         assert_eq!(p.list_error.as_deref(), Some("boom"));
         assert_eq!(ids(&p.choices(Field::Input)), [""]);
         p.set_devices(Ok(devices()));
@@ -518,5 +549,55 @@ mod tests {
     fn khz_formats_whole_and_fractional_rates() {
         assert_eq!(khz(48000.0), "48 kHz");
         assert_eq!(khz(44100.0), "44.1 kHz");
+    }
+
+    #[test]
+    fn asio_shows_one_driver_field_and_no_ring() {
+        let p = picker(config("asio"), Ok(devices()));
+        assert_eq!(
+            p.visible_fields(),
+            vec![Field::Input, Field::Block, Field::Rate, Field::Ring]
+        );
+        assert_eq!(p.field_name(Field::Input), "driver");
+        assert!(p.read_only(Field::Ring));
+        assert!(!p.read_only(Field::Rate));
+        assert_eq!(p.label(Field::Ring, 48000.0, " · "), "n/a");
+    }
+
+    #[test]
+    fn asio_driver_choice_sets_both_directions() {
+        let mut p = picker(config("asio"), Ok(devices()));
+        assert_eq!(p.choices(Field::Input)[0].label, "first driver (Mic)");
+        p.select(Field::Input);
+        assert!(p.step(1));
+        assert!(!p.edited.input.is_empty());
+        assert_eq!(p.edited.input, p.edited.output);
+    }
+
+    #[test]
+    fn asio_block_zero_is_the_driver_preferred_size() {
+        let mut c = config("asio");
+        c.block = 0;
+        let p = picker(c, Ok(devices()));
+        assert_eq!(p.label(Field::Block, 48000.0, " · "), "driver preferred");
+        assert_eq!(p.note(Field::Block), "the driver can round it");
+    }
+
+    #[test]
+    fn wasapi_keeps_its_field_names() {
+        let p = picker(config("wasapi"), Ok(devices()));
+        assert_eq!(p.field_name(Field::Input), "input");
+    }
+
+    #[test]
+    fn the_rules_come_from_the_caps_and_not_the_name() {
+        let mut caps = Caps::fake_for("null");
+        caps.one_driver = true;
+        let p = Picker::new(config("null"), caps, Ok(devices()));
+        assert_eq!(p.field_name(Field::Input), "driver");
+        assert_eq!(
+            p.visible_fields(),
+            vec![Field::Input, Field::Block, Field::Rate, Field::Ring]
+        );
     }
 }

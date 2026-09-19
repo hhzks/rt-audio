@@ -21,4 +21,24 @@ std::optional<Backend> backendFromName(std::string_view name);
 Backend          resolveBackend(Backend b);
 std::string_view backendKey(Backend b);
 
+inline constexpr std::string_view kAsioTrademarkNotice =
+    "ASIO is a registered trademark of Steinberg Media Technologies GmbH.";
+
+struct BackendCaps {
+    bool ring               = false;
+    bool oneDriver          = false;
+    bool driverPanel        = false;
+    bool exclusiveMode      = false;
+    bool rateFromDevice     = false;
+    bool blockZeroPreferred = false;
+    bool blockRounded       = false;
+    std::string_view displayName;
+    std::string_view notice;
+};
+
+BackendCaps backendCaps(Backend b);
+
+bool        backendAvailable(std::string_view key);
+std::string backendList();   // for example "wasapi | asio | null"
+
 } // namespace rt

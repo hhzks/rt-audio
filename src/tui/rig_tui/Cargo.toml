@@ -8,6 +8,9 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+asio = []
+
 [dependencies]
 rig_ui = { path = "../rig_ui" }
 clap.workspace = true

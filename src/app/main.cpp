@@ -4,6 +4,7 @@
 #include "dsp/Waveshaper.h"
 #include "io/DeviceFactory.h"
 #include "io/EngineCallback.h"
+#include "io/Utf8Console.h"
 
 #include <atomic>
 #include <chrono>
@@ -27,11 +28,13 @@ Backend parseBackend(const std::string& s) {
 }
 
 void printUsage() {
+    const bool asio = backendAvailable("asio");
     std::cout <<
         "rt-audio -- realtime audio passthrough with effects\n\n"
         "  --list                 enumerate devices and exit\n"
-        "  --backend <name>       wasapi | asio | alsa | null   (default: platform default)\n"
-        "  --block <frames>       requested block size (default: driver minimum)\n"
+        "  --backend <name>       " << backendList() << "   (default: platform default)\n"
+        "  --block <frames>       requested block size (default: driver minimum"
+                               << (asio ? "; ASIO®: driver preferred" : "") << ")\n"
         "  --rate <hz>            requested sample rate (default: 48000)\n"
         "  --in <id>              capture device id (default: system default)\n"
         "  --out <id>             render device id (default: system default)\n"
@@ -42,11 +45,13 @@ void printUsage() {
         "  --gate <dB>            noise gate threshold (default: -45)\n"
         "  --bypass               start with the chain bypassed\n"
         "  --help\n";
+    if (asio) std::cout << "\n" << kAsioTrademarkNotice << "\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
+    [[maybe_unused]] rt::Utf8Console console;
     DeviceConfig config;
     Backend backend = Backend::Default;
     double drive = 1.0, mix = 0.0, gateDb = -45.0;

@@ -47,6 +47,18 @@ option(RT_BUILD_TESTS "Build unit tests" ON)
 option(RT_BUILD_TOOLS "Build offline tools" ON)
 option(RT_BUILD_TUI "Build the rt_rig terminal UI (needs cargo)" ON)
 
+option(RT_ASIO "Build the ASIO backend (Windows; the binaries are covered by GPLv3)" OFF)
+set(RT_ASIO_SDK_DIR "" CACHE PATH "Extracted ASIOSDK folder; empty = download the pinned SDK")
+
+if(RT_ASIO)
+    if(NOT WIN32)
+        message(FATAL_ERROR "rt_audio: RT_ASIO=ON works only on Windows")
+    endif()
+    include(cmake/AsioSdk.cmake)
+    rt_resolve_asio_sdk(RT_ASIO_SDK_PATH)
+    message(STATUS "rt_audio: ASIO backend enabled (SDK ${RT_ASIO_SDK_PATH}); binaries built this way are covered by GPLv3")
+endif()
+
 set(RT_TUI_ENABLED OFF)
 if(RT_BUILD_TUI)
     find_program(RT_CARGO cargo HINTS "$ENV{HOME}/.cargo/bin" "$ENV{USERPROFILE}/.cargo/bin")

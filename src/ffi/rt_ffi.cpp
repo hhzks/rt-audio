@@ -218,6 +218,22 @@ int32_t rt_session_config(const rt_session* s, rt_config_desc* out) {
     });
 }
 
+int32_t rt_session_caps(const rt_session* s, rt_backend_caps* out) {
+    if (out == nullptr) return RT_E_ARG;
+    return guarded(s, [&](const rt::Session& session) {
+        const rt::BackendCaps c = rt::backendCaps(session.backend());
+        *out = rt_backend_caps{};
+        out->flags = (c.ring ? RT_CAP_RING : 0u) | (c.oneDriver ? RT_CAP_ONE_DRIVER : 0u) |
+                     (c.driverPanel ? RT_CAP_DRIVER_PANEL : 0u) |
+                     (c.exclusiveMode ? RT_CAP_EXCLUSIVE_MODE : 0u) |
+                     (c.rateFromDevice ? RT_CAP_RATE_FROM_DEVICE : 0u) |
+                     (c.blockZeroPreferred ? RT_CAP_BLOCK_ZERO_PREFERRED : 0u) |
+                     (c.blockRounded ? RT_CAP_BLOCK_ROUNDED : 0u);
+        rt::copyUtf8Truncated(out->display_name, sizeof out->display_name, c.displayName);
+        rt::copyUtf8Truncated(out->notice, sizeof out->notice, c.notice);
+    });
+}
+
 int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome) {
     if (s == nullptr || cfg == nullptr || outcome == nullptr) return RT_E_ARG;
     try {
@@ -243,6 +259,28 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
     } catch (...) {
         s->lastError = "unknown exception";
         return RT_E_INTERNAL;
+    }
+}
+
+int32_t rt_session_control_panel(rt_session* s, int32_t* result) {
+    if (s == nullptr || result == nullptr) return RT_E_ARG;
+    try {
+        switch (s->session.controlPanel()) {
+        case rt::PanelResult::Modal:         *result = RT_PANEL_MODAL; break;
+        case rt::PanelResult::AlreadyOpen:   *result = RT_PANEL_ALREADY_OPEN; break;
+        case rt::PanelResult::NoDriverPanel: *result = RT_PANEL_NONE; break;
+        default:                             *result = RT_PANEL_OPENED; break;
+        }
+        return RT_OK;
+    } catch (const rt::SessionStateError& e) {
+        s->lastError = e.what();
+        return RT_E_STATE;
+    } catch (const std::exception& e) {
+        s->lastError = e.what();
+        return RT_E_DEVICE;
+    } catch (...) {
+        s->lastError = "unknown exception";
+        return RT_E_DEVICE;
     }
 }
 

@@ -142,9 +142,119 @@ jobs:
           path: ${{ steps.package.outputs.archive }}
           if-no-files-found: error
 
+  windows-asio:
+    name: Windows x64 + ASIO (GPLv3)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout packaging files
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+
+      - name: Check for the ASIO preset
+        id: preset
+        shell: pwsh
+        run: |
+          $found = (Test-Path src/CMakePresets.json) -and
+              [bool](Select-String -Path src/CMakePresets.json -Pattern '"windows-clang-cl-asio"' -SimpleMatch -Quiet)
+          "found=$($found.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not $found) { Write-Output "::notice::$env:TAG has no windows-clang-cl-asio preset; no ASIO package is built" }
+
+      - name: Cache the ASIO SDK
+        if: steps.preset.outputs.found == 'true'
+        uses: actions/cache@v4
+        with:
+          path: src/build/windows-clang-asio/_deps/asiosdk-2.3.4
+          key: asio-sdk-${{ hashFiles('src/cmake/AsioSdk.cmake') }}
+
+      - name: Install Ninja
+        if: steps.preset.outputs.found == 'true'
+        run: choco install ninja -y
+
+      - name: Add LLVM to PATH
+        if: steps.preset.outputs.found == 'true'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\LLVM\bin" -Encoding utf8
+
+      - name: Install Rust toolchain
+        if: steps.preset.outputs.found == 'true'
+        working-directory: src/src/tui
+        run: rustup toolchain install
+
+      - name: Configure
+        if: steps.preset.outputs.found == 'true'
+        working-directory: src
+        run: cmake --preset windows-clang-cl-asio
+
+      - name: Build
+        if: steps.preset.outputs.found == 'true'
+        working-directory: src
+        run: cmake --build --preset windows-clang-cl-asio
+
+      - name: Test
+        if: steps.preset.outputs.found == 'true'
+        working-directory: src
+        run: ctest --test-dir build/windows-clang-asio --output-on-failure
+
+      - name: Package
+        if: steps.preset.outputs.found == 'true'
+        id: package
+        shell: pwsh
+        run: |
+          $version = if ($env:TAG) { $env:TAG.TrimStart('v') } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          $ref = if ($env:TAG) { $env:TAG } else { $env:GITHUB_SHA }
+          $name = "rt-audio-$version-windows-x64-asio"
+          $b = 'src/build/windows-clang-asio'
+          $sdk = "$b/_deps/asiosdk-2.3.4/ASIOSDK"
+          New-Item -ItemType Directory -Path $name, "$name/source/asiosdk/common" | Out-Null
+          Copy-Item -Destination $name -Path "$b/src/tui/rt_rig.exe", "$b/src/app/rt_audio.exe",
+              "$b/tools/offline_render/offline_render.exe",
+              "$b/tools/loopback_latency/loopback_latency.exe", 'src/README.md', 'ci/LICENSE',
+              'ci/assets/asio-compatible.svg'
+          Copy-Item -Path 'ci/packaging/GPL-3.0.txt' -Destination "$name/COPYING"
+          Copy-Item -Path "$sdk/common/asio.h", "$sdk/common/asiosys.h", "$sdk/common/iasiodrv.h" `
+              -Destination "$name/source/asiosdk/common"
+          Copy-Item -Path "$sdk/LICENSE.txt" -Destination "$name/source/asiosdk/LICENSE.txt"
+          @"
+          rt-audio $version for Windows, with the ASIO® backend
+
+          This package as a whole is distributed under the GNU General Public License version 3
+          (see COPYING). It contains code built from the Steinberg ASIO SDK 2.3.4, used under GPLv3
+          (see source/asiosdk/LICENSE.txt). The SDK files used by this build are in source/asiosdk/.
+          The rest of the source is the rt-audio repository at ${ref}:
+          https://github.com/$env:GITHUB_REPOSITORY/tree/$ref (MIT, see LICENSE).
+
+          ASIO is a registered trademark of Steinberg Media Technologies GmbH.
+          "@ | Out-File -FilePath "$name/ASIO-NOTICE.txt" -Encoding utf8
+          python ci/.github/scripts/third_party_notices.py src/src/tui $name
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $required = 'rt_rig.exe', 'rt_audio.exe', 'offline_render.exe', 'loopback_latency.exe',
+              'README.md', 'LICENSE', 'COPYING', 'ASIO-NOTICE.txt', 'asio-compatible.svg',
+              'THIRD-PARTY-NOTICES.txt', 'RUST-LIBRARY-COPYRIGHT.html',
+              'source/asiosdk/LICENSE.txt', 'source/asiosdk/common/asio.h',
+              'source/asiosdk/common/asiosys.h', 'source/asiosdk/common/iasiodrv.h'
+          foreach ($f in $required) {
+              if (-not (Test-Path "$name/$f")) { Write-Error "missing $f"; exit 1 }
+          }
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "archive=$name.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        if: steps.preset.outputs.found == 'true'
+        with:
+          name: windows-x64-asio
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
   publish:
     name: Attach to release
-    needs: [linux, windows]
+    needs: [linux, windows, windows-asio]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:

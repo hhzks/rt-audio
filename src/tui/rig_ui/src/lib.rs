@@ -9,3 +9,6 @@ pub mod stats;
 pub mod taper;
 pub mod theme;
 pub mod view;
+
+pub const ASIO_NOTICE: &str =
+    "ASIO is a registered trademark of Steinberg Media Technologies GmbH.";

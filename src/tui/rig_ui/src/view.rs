@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 use tachyonfx::{EffectManager, Motion, fx};
 
 use crate::app::{App, Mode, Row};
-use crate::latency::Step;
+use crate::latency::{Step, ring_cell};
 use crate::meters::{FLOOR_DB, Meter};
 use crate::model::{LatencyKind, LatencyPhase, LatencyState};
 use crate::picker::{Field, PickerStatus, khz};
@@ -152,6 +152,31 @@ fn wrap(s: &str, width: usize, lines: usize, ell: &str) -> Vec<String> {
     }
     let chars: Vec<char> = s.chars().collect();
     let mut out: Vec<String> = chars.chunks(width).map(|c| c.iter().collect()).collect();
+    if out.len() > lines {
+        out.truncate(lines);
+        if let Some(last) = out.last_mut() {
+            let longer = format!("{last}{ell}");
+            *last = fit(&longer, width, ell);
+        }
+    }
+    out
+}
+
+// Like wrap, but breaks at spaces; a word wider than the line gives the character split.
+fn wrap_words(s: &str, width: usize, lines: usize, ell: &str) -> Vec<String> {
+    if s.split(' ').any(|w| w.chars().count() > width) {
+        return wrap(s, width, lines, ell);
+    }
+    let mut out: Vec<String> = Vec::new();
+    for word in s.split(' ') {
+        match out.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => out.push(word.to_owned()),
+        }
+    }
     if out.len() > lines {
         out.truncate(lines);
         if let Some(last) = out.last_mut() {
@@ -647,7 +672,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let x0 = inner.x;
     let mut y = inner.y + 1;
 
-    let backend = format!("  {:<8}{}", "backend", p.edited.backend.to_uppercase());
+    let backend = format!("  {:<8}{}", "backend", p.caps.display_name);
     put(buf, x0, y, &backend, normal);
     y += 1;
 
@@ -657,7 +682,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         let read_only = p.read_only(field);
         let cursor = if is_sel { g.cursor } else { " " };
         let mut x = put(buf, x0, y, cursor, theme.style(Role::Accent));
-        x = put(buf, x, y, &format!(" {:<8}", field.name()), normal);
+        x = put(buf, x, y, &format!(" {:<8}", p.field_name(field)), normal);
         let value = p.label(field, app.device.sample_rate, sep);
         let text = if read_only {
             format!("  {value}")
@@ -724,12 +749,21 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         }
     };
     let bottom = inner.y + inner.height;
-    let lines = usize::from(bottom.saturating_sub(y)).min(3);
+    let notice_rows: u16 = if p.caps.notice.is_empty() { 0 } else { 2 };
+    let lines = usize::from(bottom.saturating_sub(y).saturating_sub(notice_rows)).min(3);
     for (i, line) in wrap(&status, width.saturating_sub(2), lines, ell)
         .iter()
         .enumerate()
     {
         put(buf, x0 + 2, y + i as u16, line, theme.style(role));
+    }
+    if !p.caps.notice.is_empty() {
+        for (i, line) in wrap_words(&p.caps.notice, width.saturating_sub(2), 2, ell)
+            .iter()
+            .enumerate()
+        {
+            put(buf, x0 + 2, bottom - 2 + i as u16, line, dim);
+        }
     }
 }
 
@@ -805,7 +839,7 @@ fn draw_latency(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         let mut line = format!(
             "  {:<17}{:>5}{:>7.2}{pm}{:<4.2}{:>7.2}{:>6}",
             fit(&r.label, 17, ell),
-            r.ring_blocks,
+            ring_cell(r.ring_blocks),
             r.measured_ms,
             r.spread_ms,
             r.computed_ms,
@@ -904,8 +938,13 @@ fn draw_hints(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     }
     let g = &theme.glyphs;
     let text = if app.mode() == Mode::Picker {
+        let panel = if app.picker.as_ref().is_some_and(|p| p.caps.driver_panel) {
+            "  p panel"
+        } else {
+            ""
+        };
         format!(
-            " {} field  {} change  R rescan  Esc close  qq quit",
+            " {} field  {} change{panel}  R rescan  Esc close  qq quit",
             g.key_updown, g.key_leftright
         )
     } else if app.mode() == Mode::Latency {
@@ -1274,6 +1313,9 @@ mod tests {
         assert_eq!(wrap("abcdefgh", 3, 2, "…"), ["abc", "de…"]);
         assert_eq!(wrap("abcd", 3, 2, "…"), ["abc", "d"]);
         assert!(wrap("", 3, 2, "…").is_empty());
+        assert_eq!(wrap_words("ab cd ef", 5, 2, "…"), ["ab cd", "ef"]);
+        assert_eq!(wrap_words("ab cd ef gh ij", 5, 2, "…"), ["ab cd", "ef g…"]);
+        assert_eq!(wrap_words("abcdef gh", 5, 2, "…"), ["abcde", "f gh"]);
     }
 
     #[test]
@@ -1298,7 +1340,7 @@ mod tests {
     fn latency_row(label: &str, chain: Option<f64>, unstable: bool) -> LatencyRow {
         LatencyRow {
             label: label.into(),
-            ring_blocks: 2.0,
+            ring_blocks: Some(2.0),
             measured_ms: 21.89,
             spread_ms: 0.03,
             computed_ms: 6.33,
@@ -1316,7 +1358,7 @@ mod tests {
         app.latency_rows
             .push(latency_row("excl 144/48k", Some(0.41), false));
         let mut tight = latency_row("shared 1056/48k", None, true);
-        tight.ring_blocks = 1.25;
+        tight.ring_blocks = Some(1.25);
         app.latency_rows.push(tight);
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(has(&r, "LATENCY") && !has(&r, "CHAIN"));
@@ -1394,5 +1436,33 @@ mod tests {
         let r120 = rows(&app, &t, 120, 30);
         assert!(!has(&r120, "unacc."));
         assert!(has(&r120, "CALLBACK TIME") && has(&r120, "LATENCY"));
+    }
+
+    #[test]
+    fn asio_picker_shows_the_driver_and_the_trademark_notice() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "asio");
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(has(&r, "backend ASIO®"));
+        assert!(has(&r, "▸ driver  ◂ first driver (Mic)"));
+        assert!(!has(&r, "output"));
+        assert!(!has(&r, "mode"));
+        assert!(has(&r, "ring      n/a"));
+        let i = r
+            .iter()
+            .position(|l| l.contains("ASIO is a registered trademark of Steinberg Media"))
+            .unwrap();
+        assert!(!r[i].contains("Techno"), "{}", r[i]);
+        assert!(r[i + 1].contains("│  Technologies GmbH."), "{}", r[i + 1]);
+        assert!(r[23].contains("p panel"), "{}", r[23]);
+    }
+
+    #[test]
+    fn wasapi_picker_has_no_trademark_notice_or_panel_hint() {
+        let mut e = FakeEngine::rig();
+        let app = picker_app(&mut e, "wasapi");
+        let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
+        assert!(!has(&r, "registered trademark"));
+        assert!(!r[23].contains("p panel"), "{}", r[23]);
     }
 }
