@@ -12,10 +12,10 @@ Windows and Linux compatible.
 ## Requirements
 
 - CMake >= 3.25
-- **Windows:** MSYS2 with GCC >= 16.2 (`pacman -S mingw-w64-x86_64-gcc` in the MSYS2 shell). Put
-  `<msys64>\mingw64\bin` first on `PATH`, or set `CMAKE_CXX_COMPILER` and `PATH` in a
-  `CMakeUserPresets.json`. Visual Studio or Build Tools are still necessary, because the Rust build
-  scripts build for the MSVC host.
+- **Windows:** MSYS2 with GCC >= 16.2 (`pacman -Syu`, then `pacman -S mingw-w64-x86_64-gcc` in the
+  MSYS2 shell). Put `<msys64>\mingw64\bin` first on `PATH`, or set `CMAKE_CXX_COMPILER` and `PATH`
+  in a `CMakeUserPresets.json`. Visual Studio or Build Tools are still necessary, because the Rust
+  build scripts build for the MSVC host.
 - **Linux:** GCC >= 16.2, for example the `gcc:16.2.0` Docker image. Clang cannot build this branch,
   because it has no contracts.
 - **Terminal UI (optional):** Rust 1.98.1 through rustup

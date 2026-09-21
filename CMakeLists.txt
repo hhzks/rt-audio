@@ -6,7 +6,7 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_VERSION VERSIO
     message(FATAL_ERROR
         "The mingw branch needs GCC ${RT_MIN_GCC} or later (C++26 contracts and std::inplace_vector).\n"
         "Found: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} (${CMAKE_CXX_COMPILER}).\n"
-        "Windows: MSYS2, pacman -S mingw-w64-x86_64-gcc, then put <msys64>\\mingw64\\bin first on PATH\n"
+        "Windows: MSYS2, pacman -Syu and pacman -S mingw-w64-x86_64-gcc, then put <msys64>\\mingw64\\bin first on PATH\n"
         "or use a CMakeUserPresets.json. Linux: GCC ${RT_MIN_GCC} or later, for example the gcc:16.2.0 image.")
 endif()
 add_compile_options(-fcontracts)
