@@ -292,7 +292,7 @@ PanelResult AsioDevice::openControlPanel(const DeviceConfig& config) {
     panelBusy_.store(true, std::memory_order_release);
     try {
         host_->post([this, result] {
-            const ASIOError e = driver_ ? driver_->controlPanel() : ASE_NotPresent;
+            const ASIOError e = driver_ ? driver_->controlPanel() : static_cast<ASIOError>(ASE_NotPresent);
             panelBusy_.store(false, std::memory_order_release);
             result->set_value(e);
         });

@@ -19,7 +19,7 @@ endif()
 
 # PRIVATE is deliberate: these must not leak up into rt_dsp's link line.
 if(WIN32)
-    target_link_libraries(rt_io PRIVATE ole32 avrt uuid)
+    target_link_libraries(rt_io PRIVATE ole32 avrt uuid ksuser)
 endif()
 if(UNIX AND NOT APPLE)
     find_package(Threads REQUIRED)
