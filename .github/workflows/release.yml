@@ -20,8 +20,17 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'push' && github.ref_name) || '' }}
 
 jobs:
+  guard:
+    name: Branch check
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "::error::The mingw branch does not publish releases. Tag a commit on main."
+          exit 1
+
   linux:
     name: Linux x64
+    needs: guard
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout packaging files
@@ -84,6 +93,7 @@ jobs:
 
   windows:
     name: Windows x64
+    needs: guard
     runs-on: windows-2022
     steps:
       - name: Checkout packaging files
@@ -144,6 +154,7 @@ jobs:
 
   windows-asio:
     name: Windows x64 + ASIO (GPLv3)
+    needs: guard
     runs-on: windows-2022
     steps:
       - name: Checkout packaging files
