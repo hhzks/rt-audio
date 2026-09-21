@@ -9,6 +9,8 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_VERSION VERSIO
         "Windows: MSYS2, pacman -S mingw-w64-x86_64-gcc, then put <msys64>\\mingw64\\bin first on PATH\n"
         "or use a CMakeUserPresets.json. Linux: GCC ${RT_MIN_GCC} or later, for example the gcc:16.2.0 image.")
 endif()
+add_compile_options(-fcontracts)
+add_link_options(-fcontracts)
 if(MINGW)
     add_link_options(-static)
     set(Rust_CARGO_TARGET x86_64-pc-windows-gnu CACHE STRING "Rust target for MinGW builds")

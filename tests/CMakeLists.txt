@@ -67,6 +67,15 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 endif()
 
+rt_add_test(test_cxx26)
+target_compile_options(test_cxx26 PRIVATE -fcontract-evaluation-semantic=observe)
+add_executable(cxx26_default_handler cxx26_default_handler.cpp)
+rt_set_warnings(cxx26_default_handler)
+target_compile_options(cxx26_default_handler PRIVATE -fcontract-evaluation-semantic=observe)
+add_test(NAME cxx26_default_handler COMMAND cxx26_default_handler)
+set_tests_properties(cxx26_default_handler PROPERTIES
+    PASS_REGULAR_EXPRESSION "assertion_kind: pre, semantic: observe")
+
 if(TARGET rig_tui)
     rt_add_test(test_ffi_layout)
     target_link_libraries(test_ffi_layout PRIVATE rig_tui rt_ffi)
