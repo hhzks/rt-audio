@@ -13,6 +13,6 @@ function(rt_set_warnings target)
             -Wall -Wextra -Wpedantic -Wshadow
             -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
             -Wunused -Woverloaded-virtual -Wconversion -Wsign-conversion
-            -Wdouble-promotion -Wformat=2)
+            -Wdouble-promotion -Wformat=2 -Werror)
     endif()
 endfunction()
