@@ -20,6 +20,7 @@ jobs:
           apt-get install -y --no-install-recommends cmake ninja-build libasound2-dev
 
       - name: Install rustup
+        shell: bash
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -68,6 +69,7 @@ jobs:
         id: msys2
         with:
           msystem: MINGW64
+          update: true
           install: mingw-w64-x86_64-gcc
 
       - name: Put MinGW first on PATH
@@ -116,11 +118,17 @@ jobs:
         id: msys2
         with:
           msystem: MINGW64
+          update: true
           install: mingw-w64-x86_64-gcc
 
       - name: Put MinGW first on PATH
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" -Encoding utf8
+
+      - name: Toolchain versions
+        run: |
+          cmake --version
+          g++ --version
 
       - name: Install Rust toolchain
         working-directory: src/tui
