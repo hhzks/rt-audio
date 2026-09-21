@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.25)
 project(rt_audio LANGUAGES CXX VERSION 0.1.0)
 
+set(RT_MIN_GCC 16.2)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS RT_MIN_GCC)
+    message(FATAL_ERROR
+        "The mingw branch needs GCC ${RT_MIN_GCC} or later (C++26 contracts and std::inplace_vector).\n"
+        "Found: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} (${CMAKE_CXX_COMPILER}).\n"
+        "Windows: MSYS2, pacman -S mingw-w64-x86_64-gcc, then put <msys64>\\mingw64\\bin first on PATH\n"
+        "or use a CMakeUserPresets.json. Linux: GCC ${RT_MIN_GCC} or later, for example the gcc:16.2.0 image.")
+endif()
+if(MINGW)
+    add_link_options(-static)
+    set(Rust_CARGO_TARGET x86_64-pc-windows-gnu CACHE STRING "Rust target for MinGW builds")
+endif()
+
 # CMake < 4.1 has no C++26 mapping for clang-cl; /std:c++latest is what 4.1 emits.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang"
    AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
