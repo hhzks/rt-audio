@@ -4,27 +4,32 @@ Low-latency realtime audio passthrough with an effects chain in C++26 with a Rus
 
 Windows and Linux compatible.
 
+> This is the `mingw` branch. It builds with GCC 16.2 or later, so that the code can use C++26
+> contracts and `std::inplace_vector`. Releases come from `main`.
+
 <img width="800" height="450" alt="rt-audio" src="https://github.com/user-attachments/assets/4cd0c155-bca4-4342-8fca-0cc456c0135c" />
 
 ## Requirements
 
 - CMake >= 3.25
-- **Windows:** LLVM/clang-cl >= 17 (`winget install LLVM.LLVM`), plus Visual Studio or Build Tools
-  for the MSVC STL and Windows SDK. MSVC's `cl.exe` *cannot* build this project: there is no
-  `/std:c++26` flag in any MSVC release, and updating Visual Studio does not change that. clang-cl
-  keeps the MSVC ABI, so linking is unaffected.
-- **Linux:** GCC >= 14 or Clang >= 17.
+- **Windows:** MSYS2 with GCC >= 16.2 (`pacman -S mingw-w64-x86_64-gcc` in the MSYS2 shell). Put
+  `<msys64>\mingw64\bin` first on `PATH`, or set `CMAKE_CXX_COMPILER` and `PATH` in a
+  `CMakeUserPresets.json`. Visual Studio or Build Tools are still necessary, because the Rust build
+  scripts build for the MSVC host.
+- **Linux:** GCC >= 16.2, for example the `gcc:16.2.0` Docker image. Clang cannot build this branch,
+  because it has no contracts.
 - **Terminal UI (optional):** Rust 1.98.1 through rustup
-  (`rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt`). Without `cargo`
-  on `PATH`, CMake skips `rt_rig` and builds everything else.
+  (`rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt`, and on Windows
+  also `rustup target add x86_64-pc-windows-gnu --toolchain 1.98.1`). Without `cargo` on `PATH`,
+  CMake skips `rt_rig` and builds everything else.
 
 ## Build
 
 Windows:
 ```
-cmake --preset windows-clang-cl
-cmake --build --preset windows-clang-cl
-ctest --test-dir build/windows-clang --output-on-failure
+cmake --preset windows-mingw
+cmake --build --preset windows-mingw
+ctest --test-dir build/windows-mingw --output-on-failure
 ```
 
 Linux:
@@ -34,19 +39,16 @@ cmake --build --preset linux
 ctest --test-dir build/linux --output-on-failure
 ```
 
-A `windows-msvc` preset exists only so the C++26 diagnostic is discoverable; it fails to configure
-by design.
-
 ## Run
 
 Paths below use the Windows build directory; on Linux substitute `build/linux`.
 
 ```bash
-build/windows-clang/src/app/rt_audio --list
-build/windows-clang/src/app/rt_audio --backend null --block 128 --drive 5 --mix 0.7
-build/windows-clang/src/tui/rt_rig --backend null
-build/windows-clang/tools/offline_render/offline_render --out sweep.wav --seconds 5 --drive 6 --mix 0.9
-cmake --build build/windows-clang --target check_layering
+build/windows-mingw/src/app/rt_audio --list
+build/windows-mingw/src/app/rt_audio --backend null --block 128 --drive 5 --mix 0.7
+build/windows-mingw/src/tui/rt_rig --backend null
+build/windows-mingw/tools/offline_render/offline_render --out sweep.wav --seconds 5 --drive 6 --mix 0.9
+cmake --build build/windows-mingw --target check_layering
 ```
 
 ## Terminal UI
@@ -87,8 +89,8 @@ below the WASAPI minimum are possible.
 The ASIO backend is not in the normal build. To build it:
 
 ```
-cmake --preset windows-clang-cl-asio
-cmake --build --preset windows-clang-cl-asio
+cmake --preset windows-mingw-asio
+cmake --build --preset windows-mingw-asio
 ```
 
 CMake downloads the Steinberg ASIO SDK 2.3.4 and checks its SHA-256. The SDK is used under GPLv3,
