@@ -30,3 +30,15 @@ TEST_CASE("a second prepare gives the channel count of the last prepare", "[engi
     CHECK_THAT(out[0], WithinAbs(0.25, 1e-6));
     CHECK_THAT(out[63], WithinAbs(0.25, 1e-6));
 }
+
+TEST_CASE("a second prepare with more channels keeps every channel", "[engine]") {
+    AudioEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    CHECK_NOTHROW(engine.prepare(48000.0, 64, kMaxChannels));
+    std::vector<float> in(idx(64 * kMaxChannels), 0.25f), out(idx(64 * kMaxChannels), 0.0f);
+    engine.processInterleaved(in.data(), out.data(), 64);
+    CHECK(engine.numChannels() == kMaxChannels);
+    CHECK(engine.stats().xruns.load() == 0);
+    CHECK_THAT(out.front(), WithinAbs(0.25, 1e-6));
+    CHECK_THAT(out.back(), WithinAbs(0.25, 1e-6));
+}
