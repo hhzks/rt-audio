@@ -19,8 +19,9 @@ void AudioEngine::prepare(double sampleRate, FrameCount maxBlockFrames, int numC
 
     // The ONLY allocation. Everything downstream borrows from here.
     scratch_.assign(idx(maxBlockFrames) * idx(numChannels), 0.0f);
+    channelPtrs_.clear();
     for (int ch = 0; ch < numChannels; ++ch)
-        channelPtrs_[idx(ch)] = scratch_.data() + idx(ch) * idx(maxBlockFrames);
+        channelPtrs_.push_back(scratch_.data() + idx(ch) * idx(maxBlockFrames));
 
     chain_.prepare(sampleRate, maxBlockFrames, numChannels);
     chain_.reset();

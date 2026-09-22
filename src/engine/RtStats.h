@@ -30,9 +30,7 @@ struct RtStats {
         callbackCount.fetch_add(1, std::memory_order_relaxed);
         lastCallbackNanos.store(nanos, std::memory_order_relaxed);
         callbackNanos.record(nanos);
-        auto prev = peakCallbackNanos.load(std::memory_order_relaxed);
-        while (nanos > prev &&
-               !peakCallbackNanos.compare_exchange_weak(prev, nanos, std::memory_order_relaxed)) {}
+        peakCallbackNanos.fetch_max(nanos, std::memory_order_relaxed);
     }
 
     void recordXrun() noexcept { xruns.fetch_add(1, std::memory_order_relaxed); }

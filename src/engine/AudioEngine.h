@@ -3,7 +3,7 @@
 #include "core/ParameterStore.h"
 #include "dsp/EffectChain.h"
 #include "engine/RtStats.h"
-#include <array>
+#include <inplace_vector>
 #include <vector>
 
 namespace rt {
@@ -48,7 +48,7 @@ private:
     bool       prepared_       = false;
 
     std::vector<float>                     scratch_;      // planar storage
-    std::array<float*, kMaxChannels>       channelPtrs_{}; // views into scratch_
+    std::inplace_vector<float*, kMaxChannels> channelPtrs_; // views into scratch_
 };
 
 } // namespace rt
