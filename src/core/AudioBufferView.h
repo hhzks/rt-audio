@@ -1,6 +1,5 @@
 #pragma once
 #include "Types.h"
-#include <cassert>
 
 namespace rt {
 
@@ -13,15 +12,14 @@ public:
     AudioBufferView(float* const* channels, int numChannels, FrameCount numFrames) noexcept
         : channels_(channels), numChannels_(numChannels), numFrames_(numFrames) {}
 
-    float*       channel(int c)       noexcept { assert(c < numChannels_); return channels_[c]; }
-    const float* channel(int c) const noexcept { assert(c < numChannels_); return channels_[c]; }
+    float*       channel(int c)       noexcept pre(c >= 0 && c < numChannels_) { return channels_[c]; }
+    const float* channel(int c) const noexcept pre(c >= 0 && c < numChannels_) { return channels_[c]; }
 
     int        numChannels() const noexcept { return numChannels_; }
     FrameCount numFrames()   const noexcept { return numFrames_; }
 
     // Same buffers, fewer frames. Used when an effect processes in sub-blocks.
-    AudioBufferView withFrames(FrameCount n) const noexcept {
-        assert(n <= numFrames_);
+    AudioBufferView withFrames(FrameCount n) const noexcept pre(n >= 0 && n <= numFrames_) {
         return AudioBufferView(channels_, numChannels_, n);
     }
 

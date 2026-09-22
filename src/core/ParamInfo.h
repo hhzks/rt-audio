@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -37,13 +36,13 @@ public:
         }
     }
 
-    void setDefault(std::size_t i, double v) noexcept {
+    void setDefault(std::size_t i, double v) noexcept pre(i < N) {
         defaults_[i] = v;
         values_[i].store(v, std::memory_order_relaxed);
     }
 
-    double get(std::size_t i) const noexcept { return values_[i].load(std::memory_order_relaxed); }
-    double defaultValue(std::size_t i) const noexcept { return defaults_[i]; }
+    double get(std::size_t i) const noexcept pre(i < N) { return values_[i].load(std::memory_order_relaxed); }
+    double defaultValue(std::size_t i) const noexcept pre(i < N) { return defaults_[i]; }
 
     bool set(std::size_t i, double v) noexcept {
         if (i >= N) return false;
@@ -56,8 +55,7 @@ public:
         return true;
     }
 
-    void publish(std::size_t i, double v) noexcept {
-        assert((info_[i].flags & kReadOnly) != 0);
+    void publish(std::size_t i, double v) noexcept pre(i < N && (info_[i].flags & kReadOnly) != 0) {
         values_[i].store(v, std::memory_order_relaxed);
     }
 
