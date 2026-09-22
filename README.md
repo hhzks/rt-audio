@@ -1,5 +1,14 @@
 # rt-audio
 
+[![CI](https://github.com/hhzks/rt-audio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hhzks/rt-audio/actions/workflows/ci.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/hhzks/rt-audio)](https://github.com/hhzks/rt-audio/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/hhzks/rt-audio/total)](https://github.com/hhzks/rt-audio/releases)
+[![License](https://img.shields.io/github/license/hhzks/rt-audio)](LICENSE)
+![C++26](https://img.shields.io/badge/C%2B%2B-26-00599C?logo=cplusplus)
+![Compilers](https://img.shields.io/badge/compiler-GCC%2014%2B%20%7C%20Clang%2017%2B-orange)
+![Rust 1.98.1](https://img.shields.io/badge/Rust-1.98.1-000000?logo=rust)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+
 Low-latency realtime audio passthrough with an effects chain in C++26 with a Rust TUI frontend.
 
 Windows and Linux compatible.
