@@ -11,6 +11,8 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_VERSION VERSIO
 endif()
 add_compile_options(-fcontracts)
 add_link_options(-fcontracts)
+add_compile_options(-fcontract-evaluation-semantic=$<IF:$<CONFIG:Debug>,enforce,observe>)
+add_compile_definitions($<$<NOT:$<CONFIG:Debug>>:RT_CONTRACTS_OBSERVE>)
 if(MINGW)
     add_link_options(-static)
     set(Rust_CARGO_TARGET x86_64-pc-windows-gnu CACHE STRING "Rust target for MinGW builds")

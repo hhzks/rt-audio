@@ -76,6 +76,17 @@ add_test(NAME cxx26_default_handler COMMAND cxx26_default_handler)
 set_tests_properties(cxx26_default_handler PROPERTIES
     PASS_REGULAR_EXPRESSION "assertion_kind: pre, semantic: observe")
 
+add_executable(contract_report_check contract_report_check.cpp)
+target_link_libraries(contract_report_check PRIVATE rt_contract_handler)
+rt_set_warnings(contract_report_check)
+add_test(NAME contract_report_none COMMAND contract_report_check --none)
+set_tests_properties(contract_report_none PROPERTIES FAIL_REGULAR_EXPRESSION "contract violation")
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_test(NAME contract_report_one COMMAND contract_report_check)
+    set_tests_properties(contract_report_one PROPERTIES PASS_REGULAR_EXPRESSION
+        "rt-audio: 1 contract violation\\(s\\); first at .*contract_report_check.cpp:[0-9]+ in .*: i >= 0 && i < n")
+endif()
+
 if(TARGET rig_tui)
     rt_add_test(test_ffi_layout)
     target_link_libraries(test_ffi_layout PRIVATE rig_tui rt_ffi)

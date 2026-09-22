@@ -3,3 +3,7 @@
 add_library(rt_core INTERFACE)
 target_include_directories(rt_core INTERFACE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(rt_core INTERFACE cxx_std_20)
+
+add_library(rt_contract_handler OBJECT ContractHandler.cpp)
+target_link_libraries(rt_contract_handler PUBLIC rt_core)
+rt_set_warnings(rt_contract_handler)
