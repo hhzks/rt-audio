@@ -1,5 +1,5 @@
 add_executable(rt_audio main.cpp)
-target_link_libraries(rt_audio PRIVATE rt_io rt_engine)
+target_link_libraries(rt_audio PRIVATE rt_io rt_engine rt_contract_handler)
 if(WIN32)
     target_link_libraries(rt_audio PRIVATE shell32)
 endif()

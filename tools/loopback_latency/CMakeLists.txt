@@ -1,5 +1,5 @@
 add_executable(loopback_latency main.cpp)
-target_link_libraries(loopback_latency PRIVATE rt_io rt_engine)
+target_link_libraries(loopback_latency PRIVATE rt_io rt_engine rt_contract_handler)
 target_include_directories(loopback_latency PRIVATE ${CMAKE_SOURCE_DIR}/tools)
 if(WIN32)
     target_link_libraries(loopback_latency PRIVATE shell32)

@@ -1,3 +1,5 @@
+#include "core/ContractHandler.h"
+
 #include "engine/AudioEngine.h"
 #include "dsp/NoiseGate.h"
 #include "dsp/RigChain.h"
@@ -53,6 +55,7 @@ void printUsage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    rt::contracts::ExitReport report;
     [[maybe_unused]] rt::Utf8Console console;
     DeviceConfig config;
     Backend backend = Backend::Default;

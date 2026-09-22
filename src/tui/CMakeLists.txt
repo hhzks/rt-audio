@@ -6,5 +6,5 @@ endif()
 corrosion_link_libraries(rig_tui rt_ffi)
 
 add_executable(rt_rig main.cpp)
-target_link_libraries(rt_rig PRIVATE rig_tui rt_ffi)
+target_link_libraries(rt_rig PRIVATE rig_tui rt_ffi rt_contract_handler)
 rt_set_warnings(rt_rig)

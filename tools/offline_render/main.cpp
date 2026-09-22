@@ -1,5 +1,6 @@
 // Runs the exact same AudioEngine the live app uses, but driven from a file.
 
+#include "core/ContractHandler.h"
 #include "engine/AudioEngine.h"
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
@@ -46,6 +47,7 @@ WavData makeTestSignal(double seconds, double sampleRate, int channels) {
 } // namespace
 
 int main(int argc, char** argv) {
+    rt::contracts::ExitReport report;
     std::string outPath = "render.wav";
     double seconds = 5.0, sampleRate = 48000.0;
     FrameCount block = 256;

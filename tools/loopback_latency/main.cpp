@@ -1,3 +1,5 @@
+#include "core/ContractHandler.h"
+
 #include "engine/AudioEngine.h"
 #include "engine/LoopbackProbe.h"
 #include "engine/LatencyAnalyzer.h"
@@ -206,6 +208,7 @@ double parseNumber(const std::string& flag, const std::string& v) {
 } // namespace
 
 int main(int argc, char** argv) {
+    rt::contracts::ExitReport report;
     [[maybe_unused]] rt::Utf8Console console;
     std::string inId, outId, jsonPath, saveCapturePath;
     Backend backend = Backend::Default;
