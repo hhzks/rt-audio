@@ -14,6 +14,9 @@
 #include <string>
 #include <utility>
 
+static_assert(rt::kMaxEffects + 1 == RT_MAX_STRIPS,
+              "the master strip plus every effect must fit in the snapshot");
+
 namespace rt {
 
 static_assert(RT_HIST_BUCKETS == RtHistogram::kBucketCount);

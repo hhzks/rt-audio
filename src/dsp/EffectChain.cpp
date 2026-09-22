@@ -15,8 +15,8 @@ void EffectChain::reset() {
 }
 
 void EffectChain::process(AudioBufferView& io) noexcept {
-    // Iterating a vector of unique_ptr does not allocate. The virtual calls are
-    // once per block, not per sample, so the indirection is free in practice.
+    // Iterating the chain does not allocate. The virtual calls are once per
+    // block, not per sample, so the indirection is free in practice.
     for (auto& fx : effects_) fx->process(io);
 }
 

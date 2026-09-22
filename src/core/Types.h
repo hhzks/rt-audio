@@ -9,6 +9,7 @@ using FrameCount = int;         // block sizes stay in int; they are always smal
 
 inline constexpr int kMaxChannels   = 8;
 inline constexpr int kMaxBlockFrames = 2048;
+inline constexpr int kMaxEffects     = 15;   // RT_MAX_STRIPS minus the master strip
 
 // Audio code indexes with ints (channels, frames) but containers want size_t.
 // This makes each conversion explicit and greppable instead of turning off

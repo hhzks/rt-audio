@@ -1,12 +1,14 @@
 #include "core/AudioBufferView.h"
 #include "core/ContractHandler.h"
 #include "core/ParamInfo.h"
+#include "dsp/EffectChain.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 
 namespace {
@@ -34,6 +36,14 @@ constexpr std::array<ParamInfo, 2> kInfo{{
     {"level", "lvl", "dB", -60.0, 12.0, 0.0, Taper::Linear, 0},
     {"gr",    "gr",  "dB", -26.0,  0.0, 0.0, Taper::Linear, kReadOnly},
 }};
+
+class NullEffect final : public IEffect {
+public:
+    void prepare(double, FrameCount, int) override {}
+    void reset() override {}
+    void process(AudioBufferView&) noexcept override {}
+    const char* name() const noexcept override { return "null"; }
+};
 
 bool firstPredicateContains(const char* text) {
     contracts::Violation v;
@@ -105,4 +115,32 @@ TEST_CASE("a counted violation does not allocate", "[contracts]") {
     g_trapArmed.store(false);
     CHECK(g_allocations.load() == 0);
     CHECK(contracts::violationCount() == before + 1);
+}
+
+TEST_CASE("met chain preconditions do not count", "[contracts]") {
+    EffectChain chain;
+    chain.add(std::make_unique<NullEffect>());
+    const auto before = contracts::violationCount();
+    CHECK(chain.at(0) != nullptr);
+    CHECK(chain.size() == 1);
+    CHECK(contracts::violationCount() == before);
+}
+
+TEST_CASE("add with a null effect is counted", "[contracts]") {
+    RT_NEEDS_OBSERVE();
+    EffectChain chain;
+    const auto before = contracts::violationCount();
+    chain.add(nullptr);
+    CHECK(contracts::violationCount() == before + 1);
+}
+
+TEST_CASE("add on a full chain is counted, then throws", "[contracts]") {
+    RT_NEEDS_OBSERVE();
+    EffectChain chain;
+    for (int i = 0; i < kMaxEffects; ++i)
+        chain.add(std::make_unique<NullEffect>());
+    const auto before = contracts::violationCount();
+    CHECK_THROWS_AS(chain.add(std::make_unique<NullEffect>()), std::bad_alloc);
+    CHECK(contracts::violationCount() == before + 1);
+    CHECK(chain.size() == static_cast<std::size_t>(kMaxEffects));
 }
