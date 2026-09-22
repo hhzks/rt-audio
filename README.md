@@ -13,8 +13,8 @@ Low-latency realtime audio passthrough with an effects chain in C++26 with a Rus
 
 Windows and Linux compatible.
 
-> This is the `mingw` branch. It builds with GCC 16.2 or later, so that the code can use C++26
-> contracts and `std::inplace_vector`. Releases come from `main`.
+> This is the `mingw` branch. It builds with GCC 16.2 or later, so that the code can actually use C++26
+> features since clang and MSVC don't support most features yet.
 
 <img width="800" height="450" alt="rt-audio" src="https://github.com/user-attachments/assets/4cd0c155-bca4-4342-8fca-0cc456c0135c" />
 
