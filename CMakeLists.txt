@@ -14,7 +14,8 @@ add_link_options(-fcontracts)
 add_compile_options(-fcontract-evaluation-semantic=$<IF:$<CONFIG:Debug>,enforce,observe>)
 add_compile_definitions($<$<NOT:$<CONFIG:Debug>>:RT_CONTRACTS_OBSERVE>)
 if(MINGW)
-    add_link_options(-static)
+    # GCC 16.2 at -O0: C++26 exception copy constructors clash with static libstdc++.
+    add_link_options($<$<NOT:$<CONFIG:Debug>>:-static>)
     set(Rust_CARGO_TARGET x86_64-pc-windows-gnu CACHE STRING "Rust target for MinGW builds")
 endif()
 
