@@ -12,6 +12,8 @@ if(catch2_SOURCE_DIR)
 endif()
 include(Catch)
 
+set(RT_CONTRACT_GATE "rt-audio: [0-9]+ contract violation")
+
 add_library(rt_test_exit_report OBJECT TestExitReport.cpp)
 target_link_libraries(rt_test_exit_report PUBLIC rt_contract_handler)
 rt_set_warnings(rt_test_exit_report)
@@ -29,7 +31,7 @@ function(rt_add_test name)
     else()
         target_link_libraries(${name} PRIVATE rt_contract_handler rt_test_exit_report)
         catch_discover_tests(${name} TEST_PREFIX "${name}: "
-            PROPERTIES FAIL_REGULAR_EXPRESSION "rt-audio: [0-9]+ contract violation")
+            PROPERTIES FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
     endif()
 endfunction()
 
@@ -98,10 +100,17 @@ target_link_libraries(contract_report_check PRIVATE rt_contract_handler)
 rt_set_warnings(contract_report_check)
 add_test(NAME contract_report_none COMMAND contract_report_check --none)
 set_tests_properties(contract_report_none PROPERTIES FAIL_REGULAR_EXPRESSION "contract violation")
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+string(TOLOWER "${CMAKE_BUILD_TYPE}" _rt_build_type)
+if(NOT _rt_build_type STREQUAL "debug")
     add_test(NAME contract_report_one COMMAND contract_report_check)
     set_tests_properties(contract_report_one PROPERTIES PASS_REGULAR_EXPRESSION
         "rt-audio: 1 contract violation\\(s\\); first at .*contract_report_check.cpp:[0-9]+ in .*: i >= 0 && i < n")
+
+    add_executable(test_contract_gate test_contract_gate.cpp)
+    target_link_libraries(test_contract_gate PRIVATE Catch2::Catch2WithMain rt_contract_handler rt_test_exit_report)
+    rt_set_warnings(test_contract_gate)
+    catch_discover_tests(test_contract_gate TEST_PREFIX "test_contract_gate: "
+        PROPERTIES FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}" WILL_FAIL TRUE)
 endif()
 
 if(TARGET rig_tui)
@@ -111,40 +120,48 @@ endif()
 
 if(TARGET rt_rig)
     add_test(NAME rt_rig_help COMMAND rt_rig --help)
-    set_tests_properties(rt_rig_help PROPERTIES PASS_REGULAR_EXPRESSION "--backend")
+    set_tests_properties(rt_rig_help PROPERTIES PASS_REGULAR_EXPRESSION "--backend"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
     add_test(NAME rt_rig_bad_backend COMMAND rt_rig --backend nosuch)
-    set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch")
+    set_tests_properties(rt_rig_bad_backend PROPERTIES PASS_REGULAR_EXPRESSION "unknown backend: nosuch"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
     add_test(NAME rt_rig_bad_ring COMMAND rt_rig --backend null --ring 2.5)
-    set_tests_properties(rt_rig_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 2.5")
+    set_tests_properties(rt_rig_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 2.5"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
     add_test(NAME rt_rig_zero_ring COMMAND rt_rig --backend null --ring 0)
-    set_tests_properties(rt_rig_zero_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 0" TIMEOUT 30)
+    set_tests_properties(rt_rig_zero_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 0" TIMEOUT 30
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
 endif()
 
 if(TARGET rt_audio)
     add_test(NAME rt_audio_bad_ring COMMAND rt_audio --backend null --ring 3)
-    set_tests_properties(rt_audio_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3")
+    set_tests_properties(rt_audio_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
 endif()
 if(TARGET rt_audio AND WIN32 AND NOT RT_ASIO)
     add_test(NAME rt_audio_asio_not_built COMMAND rt_audio --backend asio --list)
-    set_tests_properties(rt_audio_asio_not_built PROPERTIES PASS_REGULAR_EXPRESSION "ASIO backend not built")
+    set_tests_properties(rt_audio_asio_not_built PROPERTIES PASS_REGULAR_EXPRESSION "ASIO backend not built"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
 endif()
 if(TARGET rt_audio AND NOT RT_ASIO)
     add_test(NAME rt_audio_no_asio_notice COMMAND rt_audio --help)
-    set_tests_properties(rt_audio_no_asio_notice PROPERTIES FAIL_REGULAR_EXPRESSION "registered trademark")
+    set_tests_properties(rt_audio_no_asio_notice PROPERTIES FAIL_REGULAR_EXPRESSION "registered trademark;${RT_CONTRACT_GATE}")
 endif()
 if(RT_ASIO)
     foreach(tool rt_audio loopback_latency rt_rig)
         if(TARGET ${tool})
             add_test(NAME ${tool}_asio_notice COMMAND ${tool} --help)
             set_tests_properties(${tool}_asio_notice PROPERTIES PASS_REGULAR_EXPRESSION
-                "ASIO is a registered trademark of Steinberg Media Technologies GmbH")
+                "ASIO is a registered trademark of Steinberg Media Technologies GmbH"
+                FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
         endif()
     endforeach()
 endif()
 
 if(TARGET loopback_latency)
     add_test(NAME loopback_latency_bad_ring COMMAND loopback_latency --ring 3)
-    set_tests_properties(loopback_latency_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3")
+    set_tests_properties(loopback_latency_bad_ring PROPERTIES PASS_REGULAR_EXPRESSION "ring margin must be 1.0 to 2.0 blocks, got 3"
+        FAIL_REGULAR_EXPRESSION "${RT_CONTRACT_GATE}")
 endif()
 
 if(RT_TUI_ENABLED)
