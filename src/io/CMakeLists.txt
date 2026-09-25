@@ -4,7 +4,7 @@ set(RT_IO_SOURCES
 )
 
 if(WIN32)
-    list(APPEND RT_IO_SOURCES wasapi/WasapiDevice.cpp)
+    list(APPEND RT_IO_SOURCES wasapi/WasapiDevice.cpp wasapi/WasapiLoopbackTap.cpp)
 endif()
 
 add_library(rt_io STATIC ${RT_IO_SOURCES})
