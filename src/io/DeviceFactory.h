@@ -32,6 +32,7 @@ struct BackendCaps {
     bool rateFromDevice     = false;
     bool blockZeroPreferred = false;
     bool blockRounded       = false;
+    bool systemAudio        = false;
     std::string_view displayName;
     std::string_view notice;
 };

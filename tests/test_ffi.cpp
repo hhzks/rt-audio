@@ -15,6 +15,12 @@ using Catch::Matchers::WithinAbs;
 
 namespace {
 
+#ifdef _WIN32
+constexpr std::uint32_t kSystemAudioFlag = RT_CAP_SYSTEM_AUDIO;
+#else
+constexpr std::uint32_t kSystemAudioFlag = 0u;
+#endif
+
 rt_open_config nullConfig() {
     rt_open_config c{};
     c.backend      = "null";
@@ -210,7 +216,7 @@ TEST_CASE("the backend caps come from the session backend", "[ffi]") {
     rt_open_config cfg = nullConfig();
     REQUIRE(rt_session_open(s, &cfg) == RT_OK);
     REQUIRE(rt_session_caps(s, &caps) == RT_OK);
-    CHECK(caps.flags == 0u);
+    CHECK(caps.flags == kSystemAudioFlag);
     CHECK(std::string(caps.display_name) == "NULL");
     CHECK(caps.notice[0] == '\0');
     rt_session_destroy(s);
@@ -386,9 +392,11 @@ TEST_CASE("latency calls check their arguments and state", "[ffi]") {
 TEST_CASE("each backend packs its caps into the documented flags", "[ffi]") {
     using rt::Backend;
     CHECK(rt::capsFlags(rt::backendCaps(Backend::Wasapi)) ==
-          (RT_CAP_RING | RT_CAP_EXCLUSIVE_MODE | RT_CAP_RATE_FROM_DEVICE | RT_CAP_BLOCK_ROUNDED));
+          (RT_CAP_RING | RT_CAP_EXCLUSIVE_MODE | RT_CAP_RATE_FROM_DEVICE | RT_CAP_BLOCK_ROUNDED
+           | kSystemAudioFlag));
     CHECK(rt::capsFlags(rt::backendCaps(Backend::Asio)) ==
-          (RT_CAP_ONE_DRIVER | RT_CAP_DRIVER_PANEL | RT_CAP_BLOCK_ZERO_PREFERRED | RT_CAP_BLOCK_ROUNDED));
+          (RT_CAP_ONE_DRIVER | RT_CAP_DRIVER_PANEL | RT_CAP_BLOCK_ZERO_PREFERRED | RT_CAP_BLOCK_ROUNDED
+           | kSystemAudioFlag));
     CHECK(rt::capsFlags(rt::backendCaps(Backend::Alsa)) == RT_CAP_RING);
-    CHECK(rt::capsFlags(rt::backendCaps(Backend::Null)) == 0u);
+    CHECK(rt::capsFlags(rt::backendCaps(Backend::Null)) == kSystemAudioFlag);
 }

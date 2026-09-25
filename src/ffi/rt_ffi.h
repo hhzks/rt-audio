@@ -38,6 +38,7 @@ extern "C" {
 #define RT_CAP_RATE_FROM_DEVICE     16u
 #define RT_CAP_BLOCK_ZERO_PREFERRED 32u   /* block 0 = the driver's preferred size */
 #define RT_CAP_BLOCK_ROUNDED        64u
+#define RT_CAP_SYSTEM_AUDIO        128u   /* a system audio source field */
 
 #define RT_ID_BYTES   256
 #define RT_NAME_BYTES 128

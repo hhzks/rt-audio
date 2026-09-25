@@ -52,3 +52,14 @@ TEST_CASE("the default backend reports the platform backend", "[io]") {
     CHECK(backendCaps(Backend::Default).displayName ==
           backendCaps(resolveBackend(Backend::Default)).displayName);
 }
+
+TEST_CASE("system audio follows the platform, never alsa", "[io]") {
+#ifdef _WIN32
+    CHECK(backendCaps(Backend::Wasapi).systemAudio);
+    CHECK(backendCaps(Backend::Asio).systemAudio);
+    CHECK(backendCaps(Backend::Null).systemAudio);
+#else
+    CHECK(!backendCaps(Backend::Null).systemAudio);
+#endif
+    CHECK(!backendCaps(Backend::Alsa).systemAudio);
+}

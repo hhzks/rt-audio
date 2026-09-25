@@ -1,4 +1,5 @@
 #include "io/DeviceFactory.h"
+#include "io/ISystemAudioTap.h"
 #include "io/null/NullDevice.h"
 #include <algorithm>
 #include <stdexcept>
@@ -56,15 +57,23 @@ std::string_view backendKey(Backend b) {
     return "default";
 }
 
+#if defined(_WIN32)
+constexpr bool kHasSystemTap = true;
+#else
+constexpr bool kHasSystemTap = false;
+#endif
+
 BackendCaps backendCaps(Backend b) {
     BackendCaps c;
     switch (resolveBackend(b)) {
     case Backend::Wasapi:
         c.ring = c.exclusiveMode = c.rateFromDevice = c.blockRounded = true;
+        c.systemAudio = kHasSystemTap;
         c.displayName = "WASAPI";
         break;
     case Backend::Asio:
         c.oneDriver = c.driverPanel = c.blockZeroPreferred = c.blockRounded = true;
+        c.systemAudio = kHasSystemTap;
         c.displayName = "ASIO®";
         c.notice      = kAsioTrademarkNotice;
         break;
@@ -74,6 +83,7 @@ BackendCaps backendCaps(Backend b) {
         break;
     case Backend::Null:
     case Backend::Default:
+        c.systemAudio = kHasSystemTap;
         c.displayName = "NULL";
         break;
     }
@@ -133,6 +143,10 @@ std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend) {
 
     throw std::runtime_error(std::string("backend not available on this platform: ")
                              + backendName(backend));
+}
+
+std::unique_ptr<ISystemAudioTap> createSystemAudioTap() {
+    return nullptr;
 }
 
 } // namespace rt

@@ -12,7 +12,8 @@ inline std::uint32_t capsFlags(const BackendCaps& c) noexcept {
            (c.exclusiveMode ? RT_CAP_EXCLUSIVE_MODE : 0u) |
            (c.rateFromDevice ? RT_CAP_RATE_FROM_DEVICE : 0u) |
            (c.blockZeroPreferred ? RT_CAP_BLOCK_ZERO_PREFERRED : 0u) |
-           (c.blockRounded ? RT_CAP_BLOCK_ROUNDED : 0u);
+           (c.blockRounded ? RT_CAP_BLOCK_ROUNDED : 0u) |
+           (c.systemAudio ? RT_CAP_SYSTEM_AUDIO : 0u);
 }
 
 } // namespace rt
