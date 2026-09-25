@@ -88,6 +88,7 @@ pub struct Caps {
     pub rate_from_device: bool,
     pub block_zero_preferred: bool,
     pub block_rounded: bool,
+    pub system_audio: bool,
     pub display_name: String,
     pub notice: String,
 }
@@ -99,6 +100,7 @@ impl Caps {
             display_name: backend.to_uppercase(),
             ..Caps::default()
         };
+        c.system_audio = backend != "alsa";
         match backend {
             "wasapi" => {
                 c.ring = true;
@@ -130,6 +132,7 @@ pub struct Config {
     pub block: i32,
     pub exclusive: bool,
     pub ring_blocks: f64,
+    pub system_source: String,
 }
 
 impl Config {
@@ -154,6 +157,18 @@ impl Config {
             s += &format!(" --ring {}", self.ring_blocks);
         }
         s
+    }
+
+    pub fn same_device(&self, other: &Config) -> bool {
+        let strip = |c: &Config| Config {
+            system_source: String::new(),
+            ..c.clone()
+        };
+        strip(self) == strip(other)
+    }
+
+    pub fn source_only_change(&self, next: &Config) -> bool {
+        self.same_device(next) && self.system_source != next.system_source
     }
 }
 
@@ -194,6 +209,28 @@ pub enum LatencyPhase {
     #[default]
     Direct,
     Chain,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SystemState {
+    #[default]
+    Off,
+    Idle,
+    Playing,
+    SameDevice,
+    Error,
+}
+
+impl SystemState {
+    pub fn from_code(code: i32) -> Self {
+        match code {
+            1 => SystemState::Idle,
+            2 => SystemState::Playing,
+            3 => SystemState::SameDevice,
+            4 => SystemState::Error,
+            _ => SystemState::Off,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -249,6 +286,9 @@ pub struct Snapshot {
     pub running: bool,
     pub panel_open: bool,
     pub device_error: String,
+    pub system_peak: f32,
+    pub system_state: SystemState,
+    pub system_text: String,
 }
 
 impl Snapshot {
@@ -272,6 +312,9 @@ impl Snapshot {
             running: true,
             panel_open: false,
             device_error: String::new(),
+            system_peak: 0.0,
+            system_state: SystemState::Off,
+            system_text: String::new(),
         }
     }
 
@@ -309,6 +352,7 @@ pub trait Engine {
     fn percentile_ns(&self, counts: &Histogram, p: f64) -> u64;
     fn bucket_upper_ns(&self, bucket: usize) -> u64;
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
+    fn system_sources(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
     fn caps(&self) -> Caps;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
@@ -364,6 +408,7 @@ pub struct FakeEngine {
     pub sets: Vec<(usize, usize, f64)>,
     pub fail_next_set: Option<EngineError>,
     pub devices: Vec<DeviceEntry>,
+    pub sources: Vec<DeviceEntry>,
     pub config: Config,
     pub fail_ids: HashSet<String>,
     pub reconfigures: Vec<Config>,
@@ -399,6 +444,7 @@ impl FakeEngine {
                     param("in_gain", "in", "dB", -24.0, 24.0, 0.0, Linear),
                     param("out_gain", "out", "dB", -60.0, 12.0, 0.0, Linear),
                     toggle("bypass", 0.0),
+                    param("sys_level", "sys", "dB", -60.0, 6.0, 0.0, Linear),
                 ],
             },
             Strip {
@@ -463,6 +509,10 @@ impl FakeEngine {
                 entry("phones", "Phones", 0, 2),
                 entry("usb", "USB Interface", 2, 2),
             ],
+            sources: vec![
+                entry("spk", "Speakers", 0, 2),
+                entry("cable", "CABLE Input", 0, 2),
+            ],
             config: Config {
                 backend: "null".into(),
                 input: String::new(),
@@ -471,6 +521,7 @@ impl FakeEngine {
                 block: 128,
                 exclusive: false,
                 ring_blocks: 2.0,
+                system_source: String::new(),
             },
             fail_ids: HashSet::new(),
             reconfigures: Vec::new(),
@@ -558,6 +609,10 @@ impl Engine for FakeEngine {
             Some(e) => Err(e.clone()),
             None => Ok(self.devices.clone()),
         }
+    }
+
+    fn system_sources(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
+        Ok(self.sources.clone())
     }
 
     fn config(&self) -> &Config {
@@ -661,7 +716,7 @@ mod tests {
         let names: Vec<&str> = e.strips.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Master", "High-pass", "Gate", "Drive", "Low shelf"]);
         let counts: Vec<usize> = e.strips.iter().map(|s| s.params.len()).collect();
-        assert_eq!(counts, [3, 2, 3, 3, 3]);
+        assert_eq!(counts, [4, 2, 3, 3, 3]);
         assert_eq!(e.strips[3].latency_frames, 16);
         assert_eq!(e.strips[2].toggle_index(), Some(0));
         assert_eq!(e.strips[0].toggle_index(), Some(2));
@@ -731,6 +786,7 @@ mod tests {
             block: 0,
             exclusive: false,
             ring_blocks: 2.0,
+            system_source: String::new(),
         }
     }
 
@@ -836,5 +892,36 @@ mod tests {
                 "leave"
             ]
         );
+    }
+
+    #[test]
+    fn a_source_only_change_is_told_apart_from_a_device_change() {
+        let a = FakeEngine::rig().config;
+        let mut b = a.clone();
+        b.system_source = "spk".into();
+        assert!(a.same_device(&b));
+        assert!(a.source_only_change(&b));
+        assert!(!a.source_only_change(&a));
+        b.input = "usb".into();
+        assert!(!a.same_device(&b));
+        assert!(!a.source_only_change(&b));
+    }
+
+    #[test]
+    fn system_states_map_from_the_c_codes() {
+        assert_eq!(SystemState::from_code(0), SystemState::Off);
+        assert_eq!(SystemState::from_code(1), SystemState::Idle);
+        assert_eq!(SystemState::from_code(2), SystemState::Playing);
+        assert_eq!(SystemState::from_code(3), SystemState::SameDevice);
+        assert_eq!(SystemState::from_code(4), SystemState::Error);
+        assert_eq!(SystemState::from_code(9), SystemState::Off);
+    }
+
+    #[test]
+    fn master_has_the_sys_row() {
+        let e = FakeEngine::rig();
+        assert_eq!(e.strips[0].param_index("sys_level"), Some(3));
+        assert!(e.strips[0].params[3].is_row());
+        assert_eq!(e.strips[0].toggle_index(), Some(2));
     }
 }

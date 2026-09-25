@@ -12,6 +12,7 @@ pub enum Field {
     Block,
     Rate,
     Ring,
+    System,
 }
 
 impl Field {
@@ -23,6 +24,7 @@ impl Field {
             Field::Block => "block",
             Field::Rate => "rate",
             Field::Ring => "ring",
+            Field::System => "system",
         }
     }
 }
@@ -43,6 +45,7 @@ pub struct Choice {
 
 pub struct Picker {
     pub devices: Vec<DeviceEntry>,
+    pub sources: Vec<DeviceEntry>,
     pub list_error: Option<String>,
     pub edited: Config,
     pub cursor: usize,
@@ -94,6 +97,7 @@ impl Picker {
     pub fn new(config: Config, caps: Caps, devices: Result<Vec<DeviceEntry>, String>) -> Self {
         let mut p = Picker {
             devices: Vec::new(),
+            sources: Vec::new(),
             list_error: None,
             edited: config,
             cursor: 0,
@@ -117,6 +121,29 @@ impl Picker {
         }
     }
 
+    pub fn set_sources(&mut self, sources: Vec<DeviceEntry>) {
+        self.sources = sources;
+    }
+
+    fn source_choices(&self) -> Vec<Choice> {
+        let current = &self.edited.system_source;
+        let mut list = vec![Choice {
+            id: String::new(),
+            label: "Windows default".into(),
+        }];
+        if !current.is_empty() && !self.sources.iter().any(|d| &d.id == current) {
+            list.push(Choice {
+                id: current.clone(),
+                label: format!("(missing) {current}"),
+            });
+        }
+        list.extend(self.sources.iter().map(|d| Choice {
+            id: d.id.clone(),
+            label: d.name.clone(),
+        }));
+        list
+    }
+
     pub fn field_name(&self, field: Field) -> &'static str {
         if self.caps.one_driver && field == Field::Input {
             "driver"
@@ -126,16 +153,18 @@ impl Picker {
     }
 
     pub fn visible_fields(&self) -> Vec<Field> {
-        if self.caps.one_driver {
-            return vec![Field::Input, Field::Block, Field::Rate, Field::Ring];
-        }
-        let mut f = vec![Field::Input, Field::Output];
-        if self.caps.exclusive_mode {
+        let mut f = if self.caps.one_driver {
+            vec![Field::Input]
+        } else {
+            vec![Field::Input, Field::Output]
+        };
+        if !self.caps.one_driver && self.caps.exclusive_mode {
             f.push(Field::Mode);
         }
-        f.push(Field::Block);
-        f.push(Field::Rate);
-        f.push(Field::Ring);
+        f.extend([Field::Block, Field::Rate, Field::Ring]);
+        if self.caps.system_audio {
+            f.push(Field::System);
+        }
         f
     }
 
@@ -176,6 +205,9 @@ impl Picker {
     }
 
     pub fn choices(&self, field: Field) -> Vec<Choice> {
+        if field == Field::System {
+            return self.source_choices();
+        }
         let output = match field {
             Field::Input => false,
             Field::Output => true,
@@ -254,6 +286,19 @@ impl Picker {
                 }
                 true
             }
+            Field::System => {
+                let list = self.source_choices();
+                let i = list
+                    .iter()
+                    .position(|c| c.id == self.edited.system_source)
+                    .unwrap_or(0);
+                let j = step_index(i, list.len(), dir);
+                if j == i {
+                    return false;
+                }
+                self.edited.system_source = list[j].id.clone();
+                true
+            }
             Field::Mode => {
                 let want = dir > 0;
                 if self.edited.exclusive == want {
@@ -296,6 +341,11 @@ impl Picker {
                     .find(|c| &c.id == current)
                     .map_or_else(String::new, |c| c.label)
             }
+            Field::System => self
+                .source_choices()
+                .into_iter()
+                .find(|c| c.id == self.edited.system_source)
+                .map_or_else(String::new, |c| c.label),
             Field::Mode => {
                 let mode = if self.edited.exclusive {
                     "exclusive"
@@ -380,6 +430,7 @@ mod tests {
             block: 128,
             exclusive: false,
             ring_blocks: 2.0,
+            system_source: String::new(),
         }
     }
 
@@ -439,7 +490,8 @@ mod tests {
                 Field::Mode,
                 Field::Block,
                 Field::Rate,
-                Field::Ring
+                Field::Ring,
+                Field::System
             ]
         );
         assert!(p.read_only(Field::Rate));
@@ -556,7 +608,13 @@ mod tests {
         let p = picker(config("asio"), Ok(devices()));
         assert_eq!(
             p.visible_fields(),
-            vec![Field::Input, Field::Block, Field::Rate, Field::Ring]
+            vec![
+                Field::Input,
+                Field::Block,
+                Field::Rate,
+                Field::Ring,
+                Field::System
+            ]
         );
         assert_eq!(p.field_name(Field::Input), "driver");
         assert!(p.read_only(Field::Ring));
@@ -597,7 +655,57 @@ mod tests {
         assert_eq!(p.field_name(Field::Input), "driver");
         assert_eq!(
             p.visible_fields(),
-            vec![Field::Input, Field::Block, Field::Rate, Field::Ring]
+            vec![
+                Field::Input,
+                Field::Block,
+                Field::Rate,
+                Field::Ring,
+                Field::System
+            ]
         );
+    }
+
+    fn sources() -> Vec<DeviceEntry> {
+        vec![
+            dev("spk", "Speakers", 0, 2, false),
+            dev("cable", "CABLE Input", 0, 2, false),
+        ]
+    }
+
+    #[test]
+    fn the_system_field_lists_windows_default_then_the_sources() {
+        let mut p = picker(config("wasapi"), Ok(devices()));
+        p.set_sources(sources());
+        assert_eq!(p.visible_fields().last(), Some(&Field::System));
+        assert_eq!(ids(&p.choices(Field::System)), ["", "spk", "cable"]);
+        assert_eq!(p.label(Field::System, 48000.0, " · "), "Windows default");
+        p.select(Field::System);
+        assert!(p.step(1));
+        assert_eq!(p.edited.system_source, "spk");
+        assert_eq!(p.edited.input, "");
+        assert!(p.step(-1));
+        assert!(p.edited.system_source.is_empty());
+    }
+
+    #[test]
+    fn a_missing_source_is_listed() {
+        let mut c = config("wasapi");
+        c.system_source = "gone".into();
+        let mut p = picker(c, Ok(devices()));
+        p.set_sources(sources());
+        assert_eq!(ids(&p.choices(Field::System)), ["", "gone", "spk", "cable"]);
+    }
+
+    #[test]
+    fn only_backends_with_system_audio_show_the_field() {
+        for (b, shown) in [
+            ("wasapi", true),
+            ("asio", true),
+            ("null", true),
+            ("alsa", false),
+        ] {
+            let p = picker(config(b), Ok(devices()));
+            assert_eq!(p.visible_fields().contains(&Field::System), shown, "{b}");
+        }
     }
 }

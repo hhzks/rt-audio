@@ -10,7 +10,7 @@ use tachyonfx::{EffectManager, Motion, fx};
 use crate::app::{App, Mode, PANEL_MODAL, Row};
 use crate::latency::{Step, ring_cell};
 use crate::meters::{FLOOR_DB, Meter};
-use crate::model::{LatencyKind, LatencyPhase, LatencyState};
+use crate::model::{LatencyKind, LatencyPhase, LatencyState, SystemState};
 use crate::picker::{Field, PickerStatus, khz};
 use crate::stats::Status;
 use crate::taper;
@@ -393,7 +393,38 @@ fn draw_chain(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         0.0
     };
     let text = format!("chain latency {frames} fr{}{ms:.2} ms", sep(theme));
-    put(buf, inner.x + 3, bottom - 1, &text, theme.style(Role::Dim));
+    let x = put(buf, inner.x + 3, bottom - 1, &text, theme.style(Role::Dim));
+    if let Some(sys) = system_line(app) {
+        let room = usize::from((inner.x + inner.width).saturating_sub(x + 3));
+        let role = match app.snapshot.system_state {
+            SystemState::SameDevice | SystemState::Error => Role::Warn,
+            _ => Role::Dim,
+        };
+        put(
+            buf,
+            x + 3,
+            bottom - 1,
+            &fit(&sys, room, ell(theme)),
+            theme.style(role),
+        );
+    }
+}
+
+fn system_line(app: &App) -> Option<String> {
+    let s = &app.snapshot;
+    match s.system_state {
+        SystemState::Off => None,
+        SystemState::Idle => Some("sys idle".into()),
+        SystemState::Playing => {
+            let db = app.sys_meter.level_db();
+            Some(if db <= FLOOR_DB {
+                "sys playing".into()
+            } else {
+                format!("sys playing {db:.0} dB")
+            })
+        }
+        SystemState::SameDevice | SystemState::Error => Some(format!("sys: {}", s.system_text)),
+    }
 }
 
 fn chain_row(
@@ -686,7 +717,7 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
         let value = p.label(field, app.device.sample_rate, sep);
         let text = if read_only {
             format!("  {value}")
-        } else if matches!(field, Field::Input | Field::Output) {
+        } else if matches!(field, Field::Input | Field::Output | Field::System) {
             let w = width.saturating_sub(14);
             format!(
                 "{} {:<w$} {}",
@@ -1092,6 +1123,12 @@ mod tests {
         );
         assert!(r[1].starts_with('╭'));
         assert!(has(&r, "▸1 MASTER"));
+        assert!(has(&r, "sys"));
+        let shelf = r
+            .iter()
+            .position(|row| row.contains("5 LOW SHELF"))
+            .unwrap();
+        assert!(r[shelf + 2].contains("gain"), "{}", r[shelf + 2]);
         assert!(has(&r, "GATE    ON thr"));
         assert!(has(&r, "● OPEN"));
         assert!(has(&r, "DRIVE   ON drive"));
@@ -1239,6 +1276,7 @@ mod tests {
             &r,
             "ring    ◂ 2 blocks ▸   lower: less delay, more risk"
         ));
+        assert!(has(&r, "system  ◂ Windows default"));
         assert!(has(&r, "now  Null · 48 kHz · 128 fr"));
         assert!(r[23].contains("R rescan"), "{}", r[23]);
     }
@@ -1505,5 +1543,24 @@ mod tests {
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(!has(&r, "waiting for the driver panel"));
         assert!(r[23].contains("p panel"), "{}", r[23]);
+    }
+
+    #[test]
+    fn the_chain_line_shows_the_system_state() {
+        let theme = Theme::new(true, ColorMode::None);
+        let mut e = FakeEngine::rig();
+
+        e.next.system_state = SystemState::Idle;
+        let r = rows(&app_with(&mut e), &theme, 80, 24);
+        assert!(has(&r, "sys idle"));
+
+        e.next.system_state = SystemState::SameDevice;
+        e.next.system_text = "Phones is the rt-audio output".into();
+        let r = rows(&app_with(&mut e), &theme, 80, 24);
+        assert!(has(&r, "sys: Phones"));
+
+        e.next.system_state = SystemState::Off;
+        let r = rows(&app_with(&mut e), &theme, 80, 24);
+        assert!(!has(&r, "sys idle") && !has(&r, "sys:"));
     }
 }

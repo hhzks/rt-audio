@@ -131,6 +131,7 @@ pub struct App {
     pub snapshot: Snapshot,
     pub in_meters: Vec<Meter>,
     pub out_meters: Vec<Meter>,
+    pub sys_meter: Meter,
     pub in_clip: ClipLatch,
     pub out_clip: ClipLatch,
     pub stats: Stats,
@@ -180,6 +181,7 @@ impl App {
             snapshot,
             in_meters: vec![Meter::default(); channels],
             out_meters: vec![Meter::default(); channels],
+            sys_meter: Meter::default(),
             in_clip: ClipLatch::default(),
             out_clip: ClipLatch::default(),
             stats: Stats::new(),
@@ -277,8 +279,10 @@ impl App {
             Msg::ClosePicker => self.picker = None,
             Msg::Rescan => {
                 let devices = engine.devices().map_err(|e| e.to_string());
+                let sources = engine.system_sources().unwrap_or_default();
                 if let Some(p) = self.picker.as_mut() {
                     p.set_devices(devices);
+                    p.set_sources(sources);
                 }
             }
             Msg::DriverPanel => {
@@ -330,6 +334,7 @@ impl App {
         for (m, &p) in self.out_meters.iter_mut().zip(&snap.out_peak) {
             m.update(p, now);
         }
+        self.sys_meter.update(snap.system_peak, now);
         self.in_clip.update(snap.in_clips, now);
         self.out_clip.update(snap.out_clips, now);
         self.stats
@@ -422,7 +427,7 @@ impl App {
 
     pub fn quit_line(&self, engine: &dyn Engine) -> Option<String> {
         let now = engine.config();
-        (*now != self.launch_config)
+        (!now.same_device(&self.launch_config))
             .then(|| format!("rt-rig: to start with this config: {}", now.command_line()))
     }
 
@@ -514,7 +519,9 @@ impl App {
             .map_or_else(|| engine.config().clone(), |(c, _)| c.clone());
         let devices = engine.devices().map_err(|e| e.to_string());
         self.help = false;
-        self.picker = Some(Picker::new(config, engine.caps(), devices));
+        let mut picker = Picker::new(config, engine.caps(), devices);
+        picker.set_sources(engine.system_sources().unwrap_or_default());
+        self.picker = Some(picker);
     }
 
     fn picker_key(&mut self, msg: Msg, now: Instant) {
@@ -801,6 +808,7 @@ mod tests {
             [
                 (0, 0),
                 (0, 1),
+                (0, 3),
                 (1, 0),
                 (1, 1),
                 (2, 1),
@@ -821,7 +829,7 @@ mod tests {
         for _ in 0..20 {
             app.update(Msg::Down, &mut e, t0).unwrap();
         }
-        assert_eq!(app.selected, 9);
+        assert_eq!(app.selected, 10);
         app.update(Msg::JumpStrip(3), &mut e, t0).unwrap();
         assert_eq!(app.rows[app.selected], Row { strip: 3, param: 1 });
         app.update(Msg::JumpStrip(8), &mut e, t0).unwrap();
@@ -1452,5 +1460,34 @@ mod tests {
         let lines: Vec<&str> = table.lines().collect();
         assert!(lines[2].starts_with("asio 64/48k"));
         assert!(lines[2].contains("     — "), "{}", lines[2]);
+    }
+
+    #[test]
+    fn the_picker_loads_the_system_sources() {
+        let (mut e, mut app, t0) = setup();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        assert_eq!(app.picker.as_ref().unwrap().sources.len(), 2);
+    }
+
+    #[test]
+    fn a_system_source_change_settles_like_a_device_change() {
+        let (mut e, mut app, t0) = setup();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        app.update(Msg::OpenPicker, &mut e, at(0)).unwrap();
+        app.picker.as_mut().unwrap().select(Field::System);
+        app.update(Msg::Coarse(1), &mut e, at(0)).unwrap();
+        assert!(run_due(&mut app, &mut e, at(300)));
+        assert_eq!(e.reconfigures.len(), 1);
+        assert_eq!(e.reconfigures[0].system_source, "spk");
+        assert_eq!(e.reconfigures[0].input, "");
+    }
+
+    #[test]
+    fn the_quit_line_ignores_the_system_source() {
+        let (mut e, app, _) = setup();
+        e.config.system_source = "spk".into();
+        assert!(app.quit_line(&e).is_none());
+        e.config.input = "usb".into();
+        assert!(app.quit_line(&e).is_some());
     }
 }
