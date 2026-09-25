@@ -243,6 +243,47 @@ Session::DeviceMaker loopback(LoopbackRig& rig) {
     };
 }
 
+struct TapScript {
+    Log                log;
+    bool               throwOnStart = false;
+    float              add = 0.0f;
+    std::atomic<int>   pulls{0};
+    std::atomic<float> gain{-1.0f};
+    SystemAudioStatus  status;
+    float              peak = 0.0f;
+};
+
+class FakeTap : public ISystemAudioTap {
+public:
+    explicit FakeTap(TapScript& s) : s_(s) {}
+    std::vector<SystemSource> sources() override {
+        return {{"spk", "Speakers"}, {"cable", "CABLE Input"}};
+    }
+    void start(const TapInputs& in, double, int channels, FrameCount) override {
+        if (s_.throwOnStart) throw std::runtime_error("tap failed");
+        channels_ = channels;
+        s_.log.push_back("start:" + in.sourceId);
+    }
+    void stop() noexcept override { s_.log.push_back("stop"); }
+    void pull(float* out, FrameCount n, float gain) noexcept override {
+        s_.pulls.fetch_add(1);
+        s_.gain.store(gain);
+        for (std::size_t k = 0; k < idx(n) * idx(channels_); ++k) out[k] += s_.add * gain;
+    }
+    float takePeak() noexcept override { return s_.peak; }
+    SystemAudioStatus status() const override { return s_.status; }
+
+private:
+    TapScript& s_;
+    int        channels_ = 0;
+};
+
+Session::TapMaker fakeTap(TapScript& script) {
+    return [&script]() -> std::unique_ptr<ISystemAudioTap> {
+        return std::make_unique<FakeTap>(script);
+    };
+}
+
 LatencySettings threeRepeats() {
     LatencySettings s;
     s.repeats = 3;
@@ -269,7 +310,7 @@ TEST_CASE("strip metadata before open", "[ffi]") {
     CHECK(std::strcmp(s.stripName(2), "Gate") == 0);
     CHECK(std::strcmp(s.stripName(3), "Drive") == 0);
     CHECK(std::strcmp(s.stripName(4), "Low shelf") == 0);
-    CHECK(s.stripParams(0).size() == 3);
+    CHECK(s.stripParams(0).size() == 4);
     CHECK(s.stripParams(1).size() == 2);
     CHECK(s.stripParams(2).size() == 3);
     CHECK(s.stripParams(3).size() == 3);
@@ -771,4 +812,159 @@ TEST_CASE("other backends keep an empty id empty", "[session]") {
     s.open(Backend::Null, c);
     CHECK(s.config().inputId.empty());
     CHECK(s.config().outputId == "phones");
+}
+
+TEST_CASE("master has a system level after bypass", "[session]") {
+    Session s;
+    REQUIRE(s.stripParams(0).size() == 4);
+    const ParamInfo& p = s.stripParams(0)[3];
+    CHECK(std::string(p.id) == "sys_level");
+    CHECK(p.min == -60.0);
+    CHECK(p.max == 6.0);
+    CHECK(p.def == 0.0);
+    CHECK((s.stripParams(0)[2].flags & kToggle) != 0);
+}
+
+TEST_CASE("the system tap mixes only in the normal mode", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 5));
+    CHECK(tap.pulls.load() > 0);
+    CHECK(tap.log == Log{"start:"});
+
+    s.latencyEnter();
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 3));
+    const int held = tap.pulls.load();
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 5));
+    CHECK(tap.pulls.load() == held);
+
+    s.latencyLeave();
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 5));
+    CHECK(tap.pulls.load() > held);
+}
+
+TEST_CASE("the system level sets the tap gain; the bottom is off", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    CHECK_THAT(tap.gain.load(), WithinAbs(1.0, 1e-6));
+
+    s.setParam(0, 3, -6.0);
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 3));
+    CHECK_THAT(tap.gain.load(), WithinAbs(0.501, 0.001));
+
+    s.setParam(0, 3, -60.0);
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 3));
+    CHECK(tap.gain.load() == 0.0f);
+}
+
+TEST_CASE("a source change restarts the tap and not the device", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    const std::size_t mark = script.log.size();
+    tap.log.clear();
+
+    s.setSystemSource("cable");
+    CHECK(since(script, mark).empty());
+    CHECK(tap.log == Log{"stop", "start:cable"});
+    CHECK(s.systemSource() == "cable");
+
+    s.setSystemSource("cable");
+    CHECK(tap.log.size() == 2);
+}
+
+TEST_CASE("quick source changes while running keep the device", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    const std::size_t mark = script.log.size();
+    for (int i = 0; i < 20; ++i) s.setSystemSource(i % 2 == 0 ? "spk" : "cable");
+    CHECK(since(script, mark).empty());
+    REQUIRE(waitForCallbacks(s, snap, snap.callbacks + 3));
+    CHECK(snap.running == 1);
+}
+
+TEST_CASE("the source is kept before open and across a reconfigure", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.setSystemSource("spk");
+    s.open(Backend::Null, scriptedConfig("a"));
+    CHECK(tap.log == Log{"start:spk"});
+
+    tap.log.clear();
+    CHECK(s.reconfigure(scriptedConfig("b")) == ReconfigureResult::Applied);
+    CHECK(tap.log == Log{"stop", "start:spk"});
+}
+
+TEST_CASE("stop, then a reconfigure, stops and restarts the tap", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    tap.log.clear();
+    s.stop();
+    CHECK(tap.log == Log{"stop"});
+    CHECK(s.reconfigure(scriptedConfig("a")) == ReconfigureResult::Applied);
+    CHECK(tap.log == Log{"stop", "stop", "start:"});
+}
+
+TEST_CASE("a tap that fails to start does not stop the device", "[session]") {
+    Script script;
+    TapScript tap;
+    tap.throwOnStart = true;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    CHECK(snap.running == 1);
+    CHECK(tap.pulls.load() == 0);
+}
+
+TEST_CASE("the snapshot reports the tap", "[session]") {
+    Script script;
+    TapScript tap;
+    tap.status.state = SystemAudioState::Playing;
+    tap.status.text  = "Speakers";
+    tap.peak         = 0.5f;
+    Session s(scripted(script), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    s.snapshot(snap);
+    CHECK(snap.system_state == RT_SYS_PLAYING);
+    CHECK(std::string(snap.system_text) == "Speakers");
+    CHECK(snap.system_peak == 0.5f);
+}
+
+TEST_CASE("without a tap the snapshot says off and there are no sources", "[session]") {
+    Script script;
+    Session s(scripted(script));
+    s.open(Backend::Null, scriptedConfig("a"));
+    rt_snapshot snap{};
+    s.snapshot(snap);
+    CHECK(snap.system_state == RT_SYS_OFF);
+    CHECK(s.systemSources().empty());
+}
+
+TEST_CASE("system sources come from the tap", "[session]") {
+    Script script;
+    TapScript tap;
+    Session s(scripted(script), fakeTap(tap));
+    const std::vector<SystemSource> v = s.systemSources();
+    REQUIRE(v.size() == 2);
+    CHECK(v[1].id == "cable");
+    CHECK(v[1].name == "CABLE Input");
 }

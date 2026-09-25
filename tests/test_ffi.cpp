@@ -400,3 +400,35 @@ TEST_CASE("each backend packs its caps into the documented flags", "[ffi]") {
     CHECK(rt::capsFlags(rt::backendCaps(Backend::Alsa)) == RT_CAP_RING);
     CHECK(rt::capsFlags(rt::backendCaps(Backend::Null)) == kSystemAudioFlag);
 }
+
+TEST_CASE("the system source round-trips through the config", "[ffi]") {
+    rt_session* s = rt_session_create();
+    REQUIRE(s != nullptr);
+    CHECK(rt_session_set_system_source(s, "cable-id") == RT_OK);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+
+    rt_config_desc c{};
+    REQUIRE(rt_session_config(s, &c) == RT_OK);
+    CHECK(std::string(c.system_source) == "cable-id");
+
+    CHECK(rt_session_set_system_source(s, nullptr) == RT_OK);
+    REQUIRE(rt_session_config(s, &c) == RT_OK);
+    CHECK(c.system_source[0] == '\0');
+
+    const std::string longId(RT_ID_BYTES, 'x');
+    CHECK(rt_session_set_system_source(s, longId.c_str()) == RT_E_ARG);
+    CHECK(rt_session_set_system_source(nullptr, "x") == RT_E_ARG);
+
+    int32_t total = -1;
+    CHECK(rt_session_system_sources(s, nullptr, 0, &total) == RT_OK);
+    CHECK(total >= 0);
+    CHECK(rt_session_system_sources(s, nullptr, 1, &total) == RT_E_ARG);
+    CHECK(rt_session_system_sources(nullptr, nullptr, 0, &total) == RT_E_ARG);
+
+    rt_snapshot snap{};
+    REQUIRE(rt_session_snapshot(s, &snap) == RT_OK);
+    CHECK(snap.system_state >= RT_SYS_OFF);
+    CHECK(snap.system_state <= RT_SYS_ERROR);
+    rt_session_destroy(s);
+}

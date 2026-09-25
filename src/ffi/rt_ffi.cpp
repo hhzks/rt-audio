@@ -216,6 +216,7 @@ int32_t rt_session_config(const rt_session* s, rt_config_desc* out) {
         out->block_frames = static_cast<int32_t>(c.blockFrames);
         out->exclusive    = static_cast<uint8_t>(c.exclusiveMode);
         out->ring_blocks  = c.ringBlocks;
+        rt::copyUtf8Truncated(out->system_source, sizeof out->system_source, session.systemSource());
     });
 }
 
@@ -314,6 +315,35 @@ int32_t rt_session_latency_cancel(rt_session* s) {
 int32_t rt_session_latency_status(const rt_session* s, rt_latency_status* out) {
     if (out == nullptr) return RT_E_ARG;
     return guarded(s, [&](const rt::Session& session) { session.latencyStatus(*out); });
+}
+
+int32_t rt_session_system_sources(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total) {
+    if (s == nullptr || total == nullptr || cap < 0 || (out == nullptr && cap > 0)) return RT_E_ARG;
+    return guarded(s, [&](rt::Session& session) {
+        int32_t n = 0;
+        rt_device_info info{};
+        for (const rt::SystemSource& src : session.systemSources()) {
+            rt::DeviceInfo d;
+            d.id                = src.id;
+            d.name              = src.name;
+            d.maxOutputChannels = 2;
+            if (!rt::toDeviceInfo(d, info)) continue;
+            if (n < cap) out[n] = info;
+            ++n;
+        }
+        *total = n;
+    });
+}
+
+int32_t rt_session_set_system_source(rt_session* s, const char* id) {
+    if (s == nullptr) return RT_E_ARG;
+    if (id != nullptr && std::string_view(id).size() >= RT_ID_BYTES) {
+        s->lastError = "device id longer than " + std::to_string(RT_ID_BYTES - 1) + " bytes";
+        return RT_E_ARG;
+    }
+    return guarded(s, [&](rt::Session& session) {
+        session.setSystemSource(id != nullptr ? id : "");
+    });
 }
 
 uint64_t rt_hist_percentile_ns(const uint64_t counts[RT_HIST_BUCKETS], double p) {

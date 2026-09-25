@@ -24,13 +24,19 @@ static_assert(RT_MAX_CHANNELS == kMaxChannels);
 static_assert(RT_TAPER_LINEAR == static_cast<int>(Taper::Linear));
 static_assert(RT_TAPER_LOG == static_cast<int>(Taper::Log));
 static_assert(RT_FLAG_READ_ONLY == kReadOnly && RT_FLAG_TOGGLE == kToggle);
+static_assert(RT_SYS_OFF == static_cast<int>(SystemAudioState::Off));
+static_assert(RT_SYS_IDLE == static_cast<int>(SystemAudioState::Idle));
+static_assert(RT_SYS_PLAYING == static_cast<int>(SystemAudioState::Playing));
+static_assert(RT_SYS_SAME_DEVICE == static_cast<int>(SystemAudioState::SameDevice));
+static_assert(RT_SYS_ERROR == static_cast<int>(SystemAudioState::Error));
 
 namespace {
 
-constexpr std::array<ParamInfo, 3> kMasterInfo{{
-    {"in_gain",  "in",     "dB", -24.0, 24.0, 0.0, Taper::Linear, 0},
-    {"out_gain", "out",    "dB", -60.0, 12.0, 0.0, Taper::Linear, 0},
-    {"bypass",   "bypass", "",     0.0,  1.0, 0.0, Taper::Linear, kToggle},
+constexpr std::array<ParamInfo, 4> kMasterInfo{{
+    {"in_gain",   "in",     "dB", -24.0, 24.0, 0.0, Taper::Linear, 0},
+    {"out_gain",  "out",    "dB", -60.0, 12.0, 0.0, Taper::Linear, 0},
+    {"bypass",    "bypass", "",     0.0,  1.0, 0.0, Taper::Linear, kToggle},
+    {"sys_level", "sys",    "dB", -60.0,  6.0, 0.0, Taper::Linear, 0},
 }};
 
 std::string formatMs(double ms) {
@@ -41,9 +47,15 @@ std::string formatMs(double ms) {
 
 } // namespace
 
-Session::Session() : Session(DeviceMaker([](Backend b) { return createAudioDevice(b); })) {}
+Session::Session()
+    : Session(DeviceMaker([](Backend b) { return createAudioDevice(b); }),
+              TapMaker([] { return createSystemAudioTap(); })) {}
 
-Session::Session(DeviceMaker make) : master_(kMasterInfo), make_(std::move(make)) {
+Session::Session(DeviceMaker make)
+    : Session(std::move(make), TapMaker([] { return std::unique_ptr<ISystemAudioTap>(); })) {}
+
+Session::Session(DeviceMaker make, TapMaker makeTap)
+    : master_(kMasterInfo), make_(std::move(make)), makeTap_(std::move(makeTap)) {
     rig_ = buildRigChain(engine_.chain());
     applyMaster();
 }
@@ -104,6 +116,7 @@ void Session::open(Backend backend, const DeviceConfig& requested) {
     device_  = makeAndStart(config);
     config_  = config;
     opened_  = true;
+    startTap();
 }
 
 ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
@@ -111,6 +124,7 @@ ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
     const DeviceConfig next = withDriverIds(backend_, requested);
     if (running_.load()) throw SessionStateError("a latency measurement is running");
     if (device_ && device_->panelOpen()) throw SessionStateError("close the driver panel first");
+    stopTap();
     destroyDevice();
 
     const auto e1 = tryStart(next);
@@ -118,6 +132,7 @@ ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
         config_ = next;
         stopReason_.clear();
         message_.clear();
+        startTap();
         return ReconfigureResult::Applied;
     }
     if (next == config_) {
@@ -129,6 +144,7 @@ ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
     if (!e2) {
         stopReason_.clear();
         message_ = first + "; restored the previous config";
+        startTap();
         return ReconfigureResult::RolledBack;
     }
     stopReason_ = message_ = first + "; could not restore the previous config: " + *e2;
@@ -143,8 +159,48 @@ std::vector<DeviceInfo> Session::enumerate() {
 }
 
 void Session::stop() noexcept {
+    stopTap();
     if (!device_) return;
     try { device_->stop(); } catch (...) {}
+}
+
+void Session::startTap() noexcept {
+    if (!device_) return;
+    try {
+        if (!tap_ && makeTap_) tap_ = makeTap_();
+        if (!tap_) return;
+        const DeviceStatus st = device_->status();
+        TapInputs in;
+        in.backend   = backend_;
+        in.exclusive = config_.exclusiveMode;
+        in.sourceId  = systemSource_;
+        in.outputId  = config_.outputId;
+        tap_->start(in, st.sampleRate, st.numChannels, st.blockFrames);
+        callback_.setSystemTap(tap_.get());
+    } catch (...) {
+        callback_.setSystemTap(nullptr);
+    }
+}
+
+void Session::stopTap() noexcept {
+    if (!tap_) return;
+    callback_.setSystemTap(nullptr);
+    if (device_ && device_->isRunning()) drainCallbacks();
+    tap_->stop();
+}
+
+std::vector<SystemSource> Session::systemSources() {
+    if (!tap_ && makeTap_) tap_ = makeTap_();
+    return tap_ ? tap_->sources() : std::vector<SystemSource>{};
+}
+
+void Session::setSystemSource(const std::string& id) {
+    if (id == systemSource_) return;
+    if (running_.load()) throw SessionStateError("a latency measurement is running");
+    systemSource_ = id;
+    if (!opened_ || !device_ || !device_->isRunning()) return;
+    stopTap();
+    startTap();
 }
 
 PanelResult Session::controlPanel() {
@@ -430,6 +486,10 @@ void Session::applyMaster() noexcept {
     p.outputGain.store(static_cast<float>(std::pow(10.0, master_.get(kOutGain) / 20.0)),
                        std::memory_order_relaxed);
     p.bypass.store(master_.get(kBypass) >= 0.5, std::memory_order_relaxed);
+    const double sys = master_.get(kSysLevel);
+    callback_.setSystemGain(sys <= kMasterInfo[kSysLevel].min
+                                ? 0.0f
+                                : static_cast<float>(std::pow(10.0, sys / 20.0)));
 }
 
 DeviceStatus Session::deviceStatus() const {
@@ -467,6 +527,13 @@ void Session::snapshot(rt_snapshot& out) {
     for (std::size_t st = 0; st < strips; ++st) {
         const std::size_t n = std::min<std::size_t>(stripParams(st).size(), RT_MAX_PARAMS);
         for (std::size_t p = 0; p < n; ++p) out.params[st][p] = getParam(st, p);
+    }
+
+    if (tap_) {
+        const SystemAudioStatus sys = tap_->status();
+        out.system_peak  = tap_->takePeak();
+        out.system_state = static_cast<std::int32_t>(sys.state);
+        copyUtf8Truncated(out.system_text, sizeof out.system_text, sys.text);
     }
 
     out.running    = static_cast<std::uint8_t>(device_ && device_->isRunning() ? 1 : 0);
