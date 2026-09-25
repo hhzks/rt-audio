@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
   #include "io/wasapi/WasapiDevice.h"
+  #include "io/wasapi/WasapiLoopbackTap.h"
 #endif
 #if defined(RT_HAVE_ASIO)
   #include "io/asio/AsioDevice.h"
@@ -146,7 +147,17 @@ std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend) {
 }
 
 std::unique_ptr<ISystemAudioTap> createSystemAudioTap() {
+#if defined(_WIN32)
+    try {
+        return std::make_unique<WasapiLoopbackTap>();
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (...) {
+        return nullptr;
+    }
+#else
     return nullptr;
+#endif
 }
 
 } // namespace rt
