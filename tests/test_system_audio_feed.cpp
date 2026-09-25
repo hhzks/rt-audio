@@ -187,3 +187,43 @@ TEST_CASE("a pause keeps the learned trim", "[engine]") {
     CHECK(f.evictions() == 0);
     CHECK_THAT((sum / 50.0 - 1.0) * 1e6, WithinAbs(100.0, 100.0));
 }
+
+TEST_CASE("a stall that fills the ring is cut back on the next pull", "[engine]") {
+    SystemAudioFeed f;
+    f.prepare(1, kRate, kBlock);
+    f.beginSource(kRate, kPacket);
+    warm(f, 1);
+
+    const auto packet = filled(kPacket, 1, 0.25f);
+    for (int i = 0; i < 20; ++i) f.push(packet.data(), kPacket);
+    CHECK(f.evictions() > 0);
+
+    auto out = filled(kBlock, 1, 0.0f);
+    int pulls = 0;
+    while (!f.refilling() && pulls < 200) {
+        f.pull(out.data(), kBlock, 1.0f);
+        ++pulls;
+    }
+    CHECK(pulls <= 2 * kPacket / kBlock + 2);
+}
+
+TEST_CASE("a full ring drops new packets and keeps the read side to the consumer", "[engine]") {
+    SystemAudioFeed f;
+    f.prepare(1, kRate, kBlock);
+    f.beginSource(kRate, kPacket);
+    warm(f, 1);
+
+    const auto oldPacket = filled(kPacket, 1, 0.25f);
+    const auto newPacket = filled(kPacket, 1, 0.75f);
+    for (int i = 0; i < 20; ++i) f.push(oldPacket.data(), kPacket);
+    for (int i = 0; i < 5; ++i) f.push(newPacket.data(), kPacket);
+
+    auto out = filled(kBlock, 1, 0.0f);
+    float loudest = 0.0f;
+    for (int i = 0; i < 200 && !f.refilling(); ++i) {
+        std::fill(out.begin(), out.end(), 0.0f);
+        f.pull(out.data(), kBlock, 1.0f);
+        for (float v : out) loudest = std::max(loudest, v);
+    }
+    CHECK(loudest < 0.5f);
+}

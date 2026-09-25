@@ -58,6 +58,7 @@ private:
 
     ComPtr<IAudioClient>        client_;
     ComPtr<IAudioCaptureClient> capture_;
+    std::string        sourceName_;
     SampleFormat       format_         = SampleFormat::Float32;
     int                sourceChannels_ = 0;
     UINT32             maxFrames_      = 0;
