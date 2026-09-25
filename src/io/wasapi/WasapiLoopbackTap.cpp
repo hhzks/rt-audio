@@ -5,12 +5,15 @@
 #include "io/WinString.h"
 #include "io/wasapi/MmcssScope.h"
 #include "io/wasapi/WasapiEndpoint.h"
+#include "io/wasapi/WasapiError.h"
 
 #include <algorithm>
-#include <sstream>
+#include <cstdint>
 #include <stdexcept>
 
 namespace rt {
+
+static_assert(kHrDeviceInUse == static_cast<std::int32_t>(AUDCLNT_E_DEVICE_IN_USE));
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -163,6 +166,7 @@ bool WasapiLoopbackTap::openSource() {
         return false;
     }
     const std::string name = friendlyName(dev.get());
+    sourceName_ = name;
     if (tapPlan(inputs_, source, output) == TapAction::SameDevice) {
         setState(SystemAudioState::SameDevice,
                  name + " is the rt-audio output; set a different default output in Windows");
@@ -215,14 +219,8 @@ void WasapiLoopbackTap::closeSource() noexcept {
 
 bool WasapiLoopbackTap::fail(HRESULT hr) noexcept {
     closeSource();
-    if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
-        setState(SystemAudioState::Error, "source removed");
-        return false;
-    }
     try {
-        std::ostringstream os;
-        os << "loopback failed (hr=0x" << std::hex << static_cast<unsigned long>(hr) << ")";
-        setState(SystemAudioState::Error, os.str());
+        setState(SystemAudioState::Error, loopbackErrorText(static_cast<std::int32_t>(hr), sourceName_));
     } catch (...) {
     }
     return false;

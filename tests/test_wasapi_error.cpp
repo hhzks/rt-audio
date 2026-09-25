@@ -17,3 +17,11 @@ TEST_CASE("other failures keep today's behaviour", "[io]") {
     CHECK(wasapiActionFor(static_cast<std::int32_t>(0x80004005u)) == WasapiAction::None); // E_FAIL
     CHECK(wasapiActionFor(static_cast<std::int32_t>(0x88890001u)) == WasapiAction::None); // not initialized
 }
+
+TEST_CASE("loopback errors tell the user what to do", "[io]") {
+    CHECK(loopbackErrorText(kHrDeviceInvalidated, "Speakers") == "source removed");
+    CHECK(loopbackErrorText(kHrDeviceInUse, "Headphones")
+          == "Headphones is in use in exclusive mode; set a different default output in Windows");
+    CHECK(loopbackErrorText(static_cast<std::int32_t>(0x80070005u), "Speakers")
+          == "Speakers: loopback failed (hr=0x80070005)");
+}

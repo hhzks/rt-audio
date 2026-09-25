@@ -1,6 +1,5 @@
 #include "engine/SystemAudioFeed.h"
 #include "core/AtomicPeak.h"
-#include "core/RingPush.h"
 
 #include <algorithm>
 #include <cmath>
@@ -46,8 +45,10 @@ void SystemAudioFeed::push(const float* in, FrameCount frames) noexcept {
         const FrameCount produced = resampler_.process(
             in + idx(done) * ch, len, resampleScratch_.data(),
             static_cast<FrameCount>(resampleScratch_.size() / ch));
-        if (pushEvictingOldest(ring_, resampleScratch_.data(), idx(produced) * ch, ch))
-            evictions_.fetch_add(1, std::memory_order_relaxed);
+        const std::size_t samples = idx(produced) * ch;
+        const std::size_t fit     = std::min((ring_.writeAvailable() / ch) * ch, samples);
+        ring_.push(resampleScratch_.data(), fit);
+        if (fit < samples) evictions_.fetch_add(1, std::memory_order_relaxed);
         done += len;
     }
 }
@@ -65,6 +66,10 @@ void SystemAudioFeed::pull(float* out, FrameCount n, float gain) noexcept {
         }
         refill_.store(false, std::memory_order_release);
     }
+
+    const std::size_t keep  = target_.load(std::memory_order_acquire);
+    const std::size_t avail = ring_.readAvailable();
+    if (avail > 3 * keep) ring_.discard(avail - keep);
 
     const std::size_t got = ring_.pop(pullScratch_.data(), samples);
     if (got < samples) {
