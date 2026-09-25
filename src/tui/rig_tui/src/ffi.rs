@@ -32,6 +32,7 @@ pub const RT_CAP_EXCLUSIVE_MODE: u32 = 8;
 pub const RT_CAP_RATE_FROM_DEVICE: u32 = 16;
 pub const RT_CAP_BLOCK_ZERO_PREFERRED: u32 = 32;
 pub const RT_CAP_BLOCK_ROUNDED: u32 = 64;
+pub const RT_CAP_SYSTEM_AUDIO: u32 = 128;
 
 pub const RT_ID_BYTES: usize = 256;
 pub const RT_NAME_BYTES: usize = 128;
@@ -44,6 +45,11 @@ pub const RT_LAT_FAILED: i32 = 3;
 pub const RT_LAT_CANCELLED: i32 = 4;
 pub const RT_LAT_PHASE_CHAIN: i32 = 1;
 pub const RT_LAT_MAX_REPEATS: usize = 16;
+pub const RT_SYS_OFF: i32 = 0;
+pub const RT_SYS_IDLE: i32 = 1;
+pub const RT_SYS_PLAYING: i32 = 2;
+pub const RT_SYS_SAME_DEVICE: i32 = 3;
+pub const RT_SYS_ERROR: i32 = 4;
 
 #[repr(C)]
 pub struct RtSession {
@@ -109,6 +115,9 @@ pub struct RtSnapshot {
     pub running: u8,
     pub panel_open: u8,
     pub device_error: [c_char; 256],
+    pub system_peak: f32,
+    pub system_state: i32,
+    pub system_text: [c_char; 128],
 }
 
 #[repr(C)]
@@ -131,6 +140,7 @@ pub struct RtConfigDesc {
     pub block_frames: i32,
     pub exclusive: u8,
     pub ring_blocks: f64,
+    pub system_source: [c_char; RT_ID_BYTES],
 }
 
 #[repr(C)]
@@ -239,6 +249,13 @@ unsafe extern "C" {
     ) -> i32;
     pub fn rt_session_latency_cancel(s: *mut RtSession) -> i32;
     pub fn rt_session_latency_status(s: *const RtSession, out: *mut RtLatencyStatus) -> i32;
+    pub fn rt_session_system_sources(
+        s: *mut RtSession,
+        out: *mut RtDeviceInfo,
+        cap: i32,
+        total: *mut i32,
+    ) -> i32;
+    pub fn rt_session_set_system_source(s: *mut RtSession, id: *const c_char) -> i32;
     pub fn rt_hist_percentile_ns(counts: *const u64, p: f64) -> u64;
     pub fn rt_hist_bucket_upper_ns(bucket: i32) -> u64;
 }
@@ -260,10 +277,12 @@ pub fn layout_values() -> Vec<u64> {
     layout!(v, RtDeviceDesc; backend, input, output, sample_rate, claimed_rtt_ms, block_frames, channels);
     layout!(v, RtSnapshot; callbacks, engine_xruns, device_xruns, capture_overruns,
         capture_underruns, in_clips, out_clips, deadline_ns, hist_window, in_peak, out_peak,
-        params, channels, running, panel_open, device_error);
+        params, channels, running, panel_open, device_error, system_peak, system_state,
+        system_text);
     layout!(v, RtDeviceInfo; id, name, max_input_channels, max_output_channels,
         default_sample_rate, is_default_input, is_default_output);
-    layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive, ring_blocks);
+    layout!(v, RtConfigDesc; backend, input_id, output_id, sample_rate, block_frames, exclusive,
+        ring_blocks, system_source);
     layout!(v, RtLatencySettings; repeats, amplitude);
     layout!(v, RtLatencyRepeat; lag_ms, correlation, psr, valid, polarity_inverted);
     layout!(v, RtLatencyStatus; state, kind, phase, repeat, repeats, latency_mode,
@@ -287,8 +306,18 @@ pub fn layout_values() -> Vec<u64> {
             RT_CAP_RATE_FROM_DEVICE,
             RT_CAP_BLOCK_ZERO_PREFERRED,
             RT_CAP_BLOCK_ROUNDED,
+            RT_CAP_SYSTEM_AUDIO,
         ]
         .map(u64::from),
     );
+    for c in [
+        RT_SYS_OFF,
+        RT_SYS_IDLE,
+        RT_SYS_PLAYING,
+        RT_SYS_SAME_DEVICE,
+        RT_SYS_ERROR,
+    ] {
+        v.push(c as u64);
+    }
     v
 }
