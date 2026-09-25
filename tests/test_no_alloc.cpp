@@ -5,6 +5,7 @@
 
 #include "engine/AudioEngine.h"
 #include "engine/LoopbackProbe.h"
+#include "engine/SystemAudioFeed.h"
 #include "ffi/SessionCallback.h"
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
@@ -169,5 +170,21 @@ TEST_CASE("parameter changes do not allocate", "[engine]") {
         engine.processInterleaved(in.data(), out.data(), 256);
     }
     g_trapArmed = false;
+    CHECK(g_allocations.load() == 0);
+}
+
+TEST_CASE("system audio feed push and pull do not allocate", "[engine]") {
+    SystemAudioFeed feed;
+    feed.prepare(2, 48000.0, 256);
+    feed.beginSource(44100.0, 441);
+    std::vector<float> packet(441 * 2, 0.1f), out(256 * 2, 0.0f);
+
+    g_allocations.store(0);
+    g_trapArmed.store(true);
+    for (int i = 0; i < 50; ++i) {
+        feed.push(packet.data(), 441);
+        feed.pull(out.data(), 256, 0.5f);
+    }
+    g_trapArmed.store(false);
     CHECK(g_allocations.load() == 0);
 }
