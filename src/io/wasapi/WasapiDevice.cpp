@@ -3,6 +3,7 @@
 #include "io/wasapi/MmcssScope.h"
 #include "io/WinString.h"
 #include "io/wasapi/WasapiFormat.h"
+#include "io/wasapi/WasapiEndpoint.h"
 
 #include "core/ChannelMap.h"
 #include "core/RingPush.h"
@@ -36,28 +37,6 @@ void throwIfFailed(HRESULT hr, const char* what) {
             os << " (requested format not supported -- try the device's mix format)";
         throw std::runtime_error(os.str());
     }
-}
-
-std::optional<SampleFormat> detectFormat(const WAVEFORMATEX* fmt) noexcept {
-    const bool ext = fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE;
-    GUID sub{};
-    if (ext) sub = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt)->SubFormat;
-
-    const bool isFloat = ext ? (sub == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-                             : (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
-    const bool isPcm   = ext ? (sub == KSDATAFORMAT_SUBTYPE_PCM)
-                             : (fmt->wFormatTag == WAVE_FORMAT_PCM);
-
-    if (isFloat && fmt->wBitsPerSample == 32) return SampleFormat::Float32;
-    if (isPcm) {
-        switch (fmt->wBitsPerSample) {
-            case 16: return SampleFormat::Int16;
-            case 24: return SampleFormat::Int24;
-            case 32: return SampleFormat::Int32;
-            default: break;
-        }
-    }
-    return std::nullopt;
 }
 
 const char* formatName(SampleFormat f) noexcept {
@@ -152,19 +131,9 @@ std::vector<DeviceInfo> WasapiDevice::enumerate() {
             LPWSTR id = nullptr;
             dev->GetId(&id);
 
-            ComPtr<IPropertyStore> props;
-            std::string friendly = "(unnamed)";
-            if (SUCCEEDED(dev->OpenPropertyStore(STGM_READ, props.put()))) {
-                PROPVARIANT pv; PropVariantInit(&pv);
-                if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &pv)) &&
-                    pv.vt == VT_LPWSTR)
-                    friendly = wideToUtf8(pv.pwszVal);
-                PropVariantClear(&pv);
-            }
-
             DeviceInfo info;
             info.id   = wideToUtf8(id);
-            info.name = friendly;
+            info.name = friendlyName(dev.get());
 
             ComPtr<IAudioClient> client;
             WAVEFORMATEX* mix = nullptr;

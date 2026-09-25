@@ -1,10 +1,12 @@
 #include "io/DeviceFactory.h"
+#include "io/ISystemAudioTap.h"
 #include "io/null/NullDevice.h"
 #include <algorithm>
 #include <stdexcept>
 
 #if defined(_WIN32)
   #include "io/wasapi/WasapiDevice.h"
+  #include "io/wasapi/WasapiLoopbackTap.h"
 #endif
 #if defined(RT_HAVE_ASIO)
   #include "io/asio/AsioDevice.h"
@@ -56,15 +58,23 @@ std::string_view backendKey(Backend b) {
     return "default";
 }
 
+#if defined(_WIN32)
+constexpr bool kHasSystemTap = true;
+#else
+constexpr bool kHasSystemTap = false;
+#endif
+
 BackendCaps backendCaps(Backend b) {
     BackendCaps c;
     switch (resolveBackend(b)) {
     case Backend::Wasapi:
         c.ring = c.exclusiveMode = c.rateFromDevice = c.blockRounded = true;
+        c.systemAudio = kHasSystemTap;
         c.displayName = "WASAPI";
         break;
     case Backend::Asio:
         c.oneDriver = c.driverPanel = c.blockZeroPreferred = c.blockRounded = true;
+        c.systemAudio = kHasSystemTap;
         c.displayName = "ASIO®";
         c.notice      = kAsioTrademarkNotice;
         break;
@@ -74,6 +84,7 @@ BackendCaps backendCaps(Backend b) {
         break;
     case Backend::Null:
     case Backend::Default:
+        c.systemAudio = kHasSystemTap;
         c.displayName = "NULL";
         break;
     }
@@ -133,6 +144,20 @@ std::unique_ptr<IAudioDevice> createAudioDevice(Backend backend) {
 
     throw std::runtime_error(std::string("backend not available on this platform: ")
                              + backendName(backend));
+}
+
+std::unique_ptr<ISystemAudioTap> createSystemAudioTap() {
+#if defined(_WIN32)
+    try {
+        return std::make_unique<WasapiLoopbackTap>();
+    } catch (const std::bad_alloc&) {
+        throw;
+    } catch (...) {
+        return nullptr;
+    }
+#else
+    return nullptr;
+#endif
 }
 
 } // namespace rt

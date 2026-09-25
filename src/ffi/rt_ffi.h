@@ -38,6 +38,7 @@ extern "C" {
 #define RT_CAP_RATE_FROM_DEVICE     16u
 #define RT_CAP_BLOCK_ZERO_PREFERRED 32u   /* block 0 = the driver's preferred size */
 #define RT_CAP_BLOCK_ROUNDED        64u
+#define RT_CAP_SYSTEM_AUDIO        128u   /* a system audio source field */
 
 #define RT_ID_BYTES   256
 #define RT_NAME_BYTES 128
@@ -54,6 +55,12 @@ extern "C" {
 #define RT_LAT_PHASE_DIRECT 0
 #define RT_LAT_PHASE_CHAIN  1
 #define RT_LAT_MAX_REPEATS  16
+
+#define RT_SYS_OFF         0
+#define RT_SYS_IDLE        1   /* no audio from Windows */
+#define RT_SYS_PLAYING     2
+#define RT_SYS_SAME_DEVICE 3   /* the source is the rt-audio output */
+#define RT_SYS_ERROR       4
 
 typedef struct rt_session rt_session;
 
@@ -99,6 +106,9 @@ typedef struct {
     uint8_t  running;
     uint8_t  panel_open;                     /* a modal driver panel is open */
     char     device_error[256];                 /* empty unless the backend reported one */
+    float    system_peak;                       /* max |x| of system audio since the previous snapshot */
+    int32_t  system_state;                      /* RT_SYS_* */
+    char     system_text[128];                  /* the source name, or the message for SAME_DEVICE and ERROR */
 } rt_snapshot;
 
 typedef struct {
@@ -117,6 +127,7 @@ typedef struct {
     int32_t block_frames;             /* 0 = driver minimum */
     uint8_t exclusive;
     double  ring_blocks;
+    char    system_source[RT_ID_BYTES];   /* empty = Windows default */
 } rt_config_desc;
 
 typedef struct {
@@ -173,6 +184,8 @@ int32_t     rt_session_latency_leave(rt_session* s);
 int32_t     rt_session_latency_start(rt_session* s, int32_t kind, const rt_latency_settings* settings);
 int32_t     rt_session_latency_cancel(rt_session* s);
 int32_t     rt_session_latency_status(const rt_session* s, rt_latency_status* out);
+int32_t     rt_session_system_sources(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total);
+int32_t     rt_session_set_system_source(rt_session* s, const char* id);   /* NULL or "" = Windows default */
 
 uint64_t    rt_hist_percentile_ns(const uint64_t counts[RT_HIST_BUCKETS], double p);
 uint64_t    rt_hist_bucket_upper_ns(int32_t bucket);

@@ -4,7 +4,7 @@ use std::ptr;
 use rig_ui::model::{
     Caps, Config, Device, DeviceEntry, Engine, EngineError, HIST_BUCKETS, Histogram, LatencyKind,
     LatencyPhase, LatencyRepeat, LatencySettings, LatencyState, LatencyStatus, Outcome,
-    PanelOutcome, Param, Snapshot, Strip, Taper,
+    PanelOutcome, Param, Snapshot, Strip, SystemState, Taper,
 };
 
 use crate::ffi::{
@@ -230,6 +230,7 @@ impl FfiEngine {
             block: c.block_frames,
             exclusive: c.exclusive != 0,
             ring_blocks: c.ring_blocks,
+            system_source: from_c_array(&c.system_source),
         })
     }
 
@@ -246,6 +247,7 @@ impl FfiEngine {
             rate_from_device: has(ffi::RT_CAP_RATE_FROM_DEVICE),
             block_zero_preferred: has(ffi::RT_CAP_BLOCK_ZERO_PREFERRED),
             block_rounded: has(ffi::RT_CAP_BLOCK_ROUNDED),
+            system_audio: has(ffi::RT_CAP_SYSTEM_AUDIO),
             display_name: from_c_array(&c.display_name),
             notice: from_c_array(&c.notice),
         })
@@ -288,6 +290,58 @@ impl FfiEngine {
             });
         }
         Ok(strips)
+    }
+}
+
+type ListFn = unsafe extern "C" fn(*mut RtSession, *mut RtDeviceInfo, i32, *mut i32) -> i32;
+
+impl FfiEngine {
+    fn list(&mut self, call: ListFn) -> Result<Vec<DeviceEntry>, EngineError> {
+        let mut cap = ENUMERATE_CAP;
+        loop {
+            let mut buf: Vec<RtDeviceInfo> = (0..cap).map(|_| RtDeviceInfo::zeroed()).collect();
+            let cap_c = i32::try_from(cap)
+                .map_err(|_| EngineError::Internal("device list too long".into()))?;
+            let mut total: i32 = 0;
+            // SAFETY: `buf` has `cap` writable entries and `total` is writable.
+            self.check(unsafe { call(self.s, buf.as_mut_ptr(), cap_c, &mut total) })?;
+            let n = usize::try_from(total).unwrap_or(0);
+            if n <= cap || cap > ENUMERATE_CAP {
+                buf.truncate(n.min(cap));
+                return Ok(buf.iter().map(entry).collect());
+            }
+            cap = n;
+        }
+    }
+
+    fn reconfigure_device(&mut self, next: &Config) -> Result<Outcome, EngineError> {
+        let input = c_string(non_empty(&next.input))?;
+        let output = c_string(non_empty(&next.output))?;
+        let cfg = RtOpenConfig {
+            backend: ptr::null(),
+            input_id: ptr_of(input.as_ref()),
+            output_id: ptr_of(output.as_ref()),
+            sample_rate: next.rate,
+            block_frames: next.block,
+            exclusive: u8::from(next.exclusive),
+            ring_blocks: next.ring_blocks,
+        };
+        let mut outcome: i32 = -1;
+        // SAFETY: `self.s` is live; `cfg`, the CStrings it points to and `outcome` outlive the call.
+        let code = unsafe { ffi::rt_session_reconfigure(self.s, &cfg, &mut outcome) };
+        let result = match (code, outcome) {
+            (ffi::RT_OK, _) => Outcome::Applied,
+            (ffi::RT_E_DEVICE, ffi::RT_RECONF_ROLLED_BACK) => {
+                Outcome::RolledBack(self.last_error())
+            }
+            (ffi::RT_E_DEVICE, ffi::RT_RECONF_STOPPED) => Outcome::Stopped(self.last_error()),
+            _ => return Err(self.error(code)),
+        };
+        self.config = self.read_config()?;
+        if !matches!(result, Outcome::Stopped(_)) {
+            self.device = self.read_device()?;
+        }
+        Ok(result)
     }
 }
 
@@ -342,6 +396,9 @@ impl Engine for FfiEngine {
             running: raw.running != 0,
             panel_open: raw.panel_open != 0,
             device_error: from_c_array(&raw.device_error),
+            system_peak: raw.system_peak,
+            system_state: SystemState::from_code(raw.system_state),
+            system_text: from_c_array(&raw.system_text),
         })
     }
 
@@ -356,23 +413,11 @@ impl Engine for FfiEngine {
     }
 
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
-        let mut cap = ENUMERATE_CAP;
-        loop {
-            let mut buf: Vec<RtDeviceInfo> = (0..cap).map(|_| RtDeviceInfo::zeroed()).collect();
-            let cap_c = i32::try_from(cap)
-                .map_err(|_| EngineError::Internal("device list too long".into()))?;
-            let mut total: i32 = 0;
-            // SAFETY: `buf` has `cap` writable entries and `total` is writable.
-            self.check(unsafe {
-                ffi::rt_session_enumerate(self.s, buf.as_mut_ptr(), cap_c, &mut total)
-            })?;
-            let n = usize::try_from(total).unwrap_or(0);
-            if n <= cap || cap > ENUMERATE_CAP {
-                buf.truncate(n.min(cap));
-                return Ok(buf.iter().map(entry).collect());
-            }
-            cap = n;
-        }
+        self.list(ffi::rt_session_enumerate)
+    }
+
+    fn system_sources(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
+        self.list(ffi::rt_session_system_sources)
     }
 
     fn config(&self) -> &Config {
@@ -384,31 +429,17 @@ impl Engine for FfiEngine {
     }
 
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
-        let input = c_string(non_empty(&next.input))?;
-        let output = c_string(non_empty(&next.output))?;
-        let cfg = RtOpenConfig {
-            backend: ptr::null(),
-            input_id: ptr_of(input.as_ref()),
-            output_id: ptr_of(output.as_ref()),
-            sample_rate: next.rate,
-            block_frames: next.block,
-            exclusive: u8::from(next.exclusive),
-            ring_blocks: next.ring_blocks,
+        let result = if self.config.source_only_change(next) {
+            Outcome::Applied
+        } else {
+            self.reconfigure_device(next)?
         };
-        let mut outcome: i32 = -1;
-        // SAFETY: `self.s` is live; `cfg`, the CStrings it points to and `outcome` outlive the call.
-        let code = unsafe { ffi::rt_session_reconfigure(self.s, &cfg, &mut outcome) };
-        let result = match (code, outcome) {
-            (ffi::RT_OK, _) => Outcome::Applied,
-            (ffi::RT_E_DEVICE, ffi::RT_RECONF_ROLLED_BACK) => {
-                Outcome::RolledBack(self.last_error())
-            }
-            (ffi::RT_E_DEVICE, ffi::RT_RECONF_STOPPED) => Outcome::Stopped(self.last_error()),
-            _ => return Err(self.error(code)),
-        };
-        self.config = self.read_config()?;
-        if !matches!(result, Outcome::Stopped(_)) {
-            self.device = self.read_device()?;
+        if next.system_source != self.config.system_source && !matches!(result, Outcome::Stopped(_))
+        {
+            let id = c_string(non_empty(&next.system_source))?;
+            // SAFETY: `self.s` is live; the CString outlives the call.
+            self.check(unsafe { ffi::rt_session_set_system_source(self.s, ptr_of(id.as_ref())) })?;
+            self.config = self.read_config()?;
         }
         Ok(result)
     }

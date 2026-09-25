@@ -66,6 +66,9 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_snapshot, running);
     FIELD(rt_snapshot, panel_open);
     FIELD(rt_snapshot, device_error);
+    FIELD(rt_snapshot, system_peak);
+    FIELD(rt_snapshot, system_state);
+    FIELD(rt_snapshot, system_text);
 
     LAYOUT(rt_device_info);
     FIELD(rt_device_info, id);
@@ -84,6 +87,7 @@ std::vector<std::uint64_t> cLayout() {
     FIELD(rt_config_desc, block_frames);
     FIELD(rt_config_desc, exclusive);
     FIELD(rt_config_desc, ring_blocks);
+    FIELD(rt_config_desc, system_source);
 
     LAYOUT(rt_latency_settings);
     FIELD(rt_latency_settings, repeats);
@@ -124,8 +128,11 @@ std::vector<std::uint64_t> cLayout() {
     for (int c : {RT_PANEL_OPENED, RT_PANEL_MODAL, RT_PANEL_ALREADY_OPEN, RT_PANEL_NONE})
         v.push_back(static_cast<std::uint64_t>(c));
     for (std::uint64_t c : {RT_CAP_RING, RT_CAP_ONE_DRIVER, RT_CAP_DRIVER_PANEL, RT_CAP_EXCLUSIVE_MODE,
-                            RT_CAP_RATE_FROM_DEVICE, RT_CAP_BLOCK_ZERO_PREFERRED, RT_CAP_BLOCK_ROUNDED})
+                            RT_CAP_RATE_FROM_DEVICE, RT_CAP_BLOCK_ZERO_PREFERRED, RT_CAP_BLOCK_ROUNDED,
+                            RT_CAP_SYSTEM_AUDIO})
         v.push_back(c);
+    for (int c : {RT_SYS_OFF, RT_SYS_IDLE, RT_SYS_PLAYING, RT_SYS_SAME_DEVICE, RT_SYS_ERROR})
+        v.push_back(static_cast<std::uint64_t>(c));
     return v;
 }
 
@@ -133,7 +140,7 @@ std::vector<std::uint64_t> cLayout() {
 
 TEST_CASE("rust mirrors match the C header", "[ffi]") {
     const std::vector<std::uint64_t> expected = cLayout();
-    std::vector<std::uint64_t> actual(128, 0);
+    std::vector<std::uint64_t> actual(160, 0);
     const std::size_t n = rt_tui_layout_probe(actual.data(), actual.size());
     REQUIRE(n == expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {

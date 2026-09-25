@@ -220,6 +220,7 @@ mod tests {
             block: 0,
             exclusive,
             ring_blocks: 2.0,
+            system_source: String::new(),
         }
     }
 
@@ -421,6 +422,7 @@ mod tests {
             block: 64,
             exclusive: false,
             ring_blocks: 2.0,
+            system_source: String::new(),
         };
         let device = Device {
             backend: "ASIO".into(),

@@ -7,6 +7,7 @@
 #include "engine/LoopbackProbe.h"
 #include "ffi/SessionCallback.h"
 #include "io/IAudioDevice.h"
+#include "io/ISystemAudioTap.h"
 
 #include <atomic>
 #include <cstddef>
@@ -52,9 +53,11 @@ struct DevicePair {
 class Session {
 public:
     using DeviceMaker = std::function<std::unique_ptr<IAudioDevice>(Backend)>;
+    using TapMaker    = std::function<std::unique_ptr<ISystemAudioTap>()>;
 
     Session();
     explicit Session(DeviceMaker make);
+    Session(DeviceMaker make, TapMaker makeTap);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -88,8 +91,12 @@ public:
     DeviceStatus deviceStatus() const;
     void         snapshot(rt_snapshot& out);
 
+    std::vector<SystemSource> systemSources();
+    void setSystemSource(const std::string& id);
+    const std::string& systemSource() const noexcept { return systemSource_; }
+
 private:
-    enum : std::size_t { kInGain = 0, kOutGain = 1, kBypass = 2 };
+    enum : std::size_t { kInGain = 0, kOutGain = 1, kBypass = 2, kSysLevel = 3 };
 
     const IEffect& effect(std::size_t strip) const;
     void checkParam(std::size_t strip, std::size_t param) const;
@@ -102,13 +109,16 @@ private:
     std::uint64_t dropoutCount();
     void drainCallbacks() noexcept;
     bool controlPassedLocked(const DeviceConfig& config) const;
+    void startTap() noexcept;
+    void stopTap() noexcept;
 
     AudioEngine                   engine_;      // declared first, destroyed last
     RigChain                      rig_{};
     LoopbackProbe                 probe_;
     SessionCallback               callback_{engine_, probe_};
-    ParamBlock<3>                 master_;
+    ParamBlock<4>                 master_;
     DeviceMaker                   make_;
+    TapMaker                      makeTap_;
     Backend                       backend_ = Backend::Null;
     DeviceConfig                  config_{};
     std::string                   stopReason_;
@@ -119,7 +129,9 @@ private:
     mutable std::mutex            latencyMutex_;
     rt_latency_status             latency_{};
     std::vector<DevicePair>       controlPassed_;
-    std::unique_ptr<IAudioDevice> device_;      // destroyed right after worker_: joins the device thread
+    std::string                      systemSource_;
+    std::unique_ptr<ISystemAudioTap> tap_;         // outlives device_: the device thread calls pull()
+    std::unique_ptr<IAudioDevice> device_;     // destroyed right after worker_: joins the device thread
     std::jthread                  worker_;      // declared last, destroyed first
 };
 
