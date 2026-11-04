@@ -365,7 +365,7 @@ impl Picker {
 
     pub fn label(&self, field: Field, device_rate: f64, sep: &str) -> String {
         match field {
-            Field::Backend => self.edited.backend.clone(),
+            Field::Backend => self.caps.display_name.clone(),
             Field::Input | Field::Output => {
                 let current = if field == Field::Output {
                     &self.edited.output
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(p.visible_fields()[0], Field::Backend);
         assert_eq!(p.field_name(Field::Backend), "backend");
         assert_eq!(p.selected(), Field::Input);
-        assert_eq!(p.label(Field::Backend, 48000.0, " · "), "wasapi");
+        assert_eq!(p.label(Field::Backend, 48000.0, " · "), "WASAPI");
     }
 
     #[test]
