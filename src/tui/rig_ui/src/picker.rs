@@ -119,11 +119,17 @@ impl Picker {
     }
 
     pub fn set_backend_info(&mut self, caps: Caps, devices: Result<Vec<DeviceEntry>, String>) {
+        let selected = self.selected();
         if !caps.exclusive_mode {
             self.edited.exclusive = false;
         }
         self.caps = caps;
         self.set_devices(devices);
+        if self.visible_fields().contains(&selected) {
+            self.select(selected);
+        } else {
+            self.select(Field::Backend);
+        }
     }
 
     pub fn set_devices(&mut self, devices: Result<Vec<DeviceEntry>, String>) {
@@ -521,6 +527,22 @@ mod tests {
         assert!(!f.contains(&Field::Output));
         assert!(!p.edited.exclusive);
         assert!(p.devices.is_empty());
+        assert_eq!(p.selected(), Field::Backend);
+    }
+
+    #[test]
+    fn new_backend_info_keeps_a_visible_field_selected() {
+        let mut p = picker(config("wasapi"), Ok(devices()));
+        p.select(Field::Ring);
+        p.set_backend_info(Caps::fake_for("null"), Ok(devices()));
+        assert_eq!(p.selected(), Field::Ring);
+    }
+
+    #[test]
+    fn new_backend_info_moves_off_a_hidden_field_to_backend() {
+        let mut p = picker(config("wasapi"), Ok(devices()));
+        p.select(Field::Mode);
+        p.set_backend_info(Caps::fake_for("asio"), Ok(Vec::new()));
         assert_eq!(p.selected(), Field::Backend);
     }
 
