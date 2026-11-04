@@ -148,6 +148,7 @@ pub struct App {
     pub latency: Option<LatencyScreen>,
     pub latency_rows: Vec<LatencyRow>,
     message: Option<(String, Instant)>,
+    notice: Option<String>,
     quit_armed: Option<Instant>,
     pending: Option<(Config, Instant)>,
     last_retry: Option<Instant>,
@@ -200,6 +201,7 @@ impl App {
             latency: None,
             latency_rows: Vec::new(),
             message: None,
+            notice: None,
             quit_armed: None,
             pending: None,
             last_retry: None,
@@ -225,6 +227,7 @@ impl App {
         now: Instant,
     ) -> Result<(), EngineError> {
         self.now = now;
+        self.notice = None;
         if msg != Msg::Quit {
             self.quit_armed = None;
         }
@@ -502,6 +505,12 @@ impl App {
             .as_ref()
             .filter(|(_, t)| self.now.saturating_duration_since(*t) < MESSAGE_TIME)
             .map(|(m, _)| m.as_str())
+            .or(self.notice.as_deref())
+    }
+
+    /// Shown until the next key.
+    pub fn notice(&mut self, text: &str) {
+        self.notice = Some(text.to_owned());
     }
 
     pub fn bypassed(&self) -> bool {
@@ -766,6 +775,17 @@ mod tests {
         app.update(Msg::Up, e, now).unwrap();
         assert_eq!(app.picker.as_ref().unwrap().selected(), Field::Backend);
         app.update(Msg::Coarse(-1), e, now).unwrap();
+    }
+
+    #[test]
+    fn notice_stays_until_a_key() {
+        let (mut e, mut app, t0) = setup();
+        app.notice("ASIO did not open: x; using WASAPI");
+        ingest(&mut app, &mut e, t0 + Duration::from_secs(10));
+        assert_eq!(app.message(), Some("ASIO did not open: x; using WASAPI"));
+        app.update(Msg::Down, &mut e, t0 + Duration::from_secs(11))
+            .unwrap();
+        assert_eq!(app.message(), None);
     }
 
     #[test]
