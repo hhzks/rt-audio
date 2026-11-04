@@ -703,10 +703,6 @@ fn draw_picker(app: &App, theme: &Theme, area: Rect, buf: &mut Buffer) {
     let x0 = inner.x;
     let mut y = inner.y + 1;
 
-    let backend = format!("  {:<8}{}", "backend", p.caps.display_name);
-    put(buf, x0, y, &backend, normal);
-    y += 1;
-
     let selected = p.selected();
     for field in p.visible_fields() {
         let is_sel = field == selected;
@@ -1267,7 +1263,8 @@ mod tests {
         let app = picker_app(&mut e, "wasapi");
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
         assert!(has(&r, "DEVICE") && !has(&r, "CHAIN"));
-        assert!(has(&r, "backend WASAPI"));
+        assert!(has(&r, "backend ◂ WASAPI ▸"));
+        assert_eq!(r.iter().filter(|l| l.contains("backend")).count(), 1);
         assert!(has(&r, "▸ input   ◂ System default (Mic)"));
         assert!(has(&r, "mode    ◂ shared ▸"));
         assert!(has(&r, "◂ 128 fr · 2.67 ms ▸   the driver can round it"));
@@ -1495,7 +1492,8 @@ mod tests {
         let mut e = FakeEngine::rig();
         let app = picker_app(&mut e, "asio");
         let r = rows(&app, &Theme::new(true, ColorMode::TrueColor), 80, 24);
-        assert!(has(&r, "backend ASIO®"));
+        assert!(has(&r, "backend ◂ ASIO® ▸"));
+        assert_eq!(r.iter().filter(|l| l.contains("backend")).count(), 1);
         assert!(has(&r, "▸ driver  ◂ first driver (Mic)"));
         assert!(!has(&r, "output"));
         assert!(!has(&r, "mode"));

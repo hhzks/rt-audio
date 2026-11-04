@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 pub const HIST_BUCKETS: usize = 322;
@@ -355,6 +355,9 @@ pub trait Engine {
     fn system_sources(&mut self) -> Result<Vec<DeviceEntry>, EngineError>;
     fn config(&self) -> &Config;
     fn caps(&self) -> Caps;
+    fn backends(&self) -> Vec<String>;
+    fn backend_caps(&self, backend: &str) -> Caps;
+    fn devices_for(&mut self, backend: &str) -> Result<Vec<DeviceEntry>, EngineError>;
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError>;
     fn control_panel(&mut self) -> Result<PanelOutcome, EngineError>;
     fn latency_enter(&mut self) -> Result<(), EngineError>;
@@ -408,6 +411,9 @@ pub struct FakeEngine {
     pub sets: Vec<(usize, usize, f64)>,
     pub fail_next_set: Option<EngineError>,
     pub devices: Vec<DeviceEntry>,
+    pub devices_by_backend: HashMap<String, Vec<DeviceEntry>>,
+    pub backends: Vec<String>,
+    pub fail_backends: HashSet<String>,
     pub sources: Vec<DeviceEntry>,
     pub config: Config,
     pub fail_ids: HashSet<String>,
@@ -509,6 +515,9 @@ impl FakeEngine {
                 entry("phones", "Phones", 0, 2),
                 entry("usb", "USB Interface", 2, 2),
             ],
+            devices_by_backend: HashMap::new(),
+            backends: vec!["wasapi".into(), "asio".into(), "null".into()],
+            fail_backends: HashSet::new(),
             sources: vec![
                 entry("spk", "Speakers", 0, 2),
                 entry("cable", "CABLE Input", 0, 2),
@@ -536,7 +545,9 @@ impl FakeEngine {
     }
 
     fn fails(&self, c: &Config) -> bool {
-        self.fail_ids.contains(&c.input) || self.fail_ids.contains(&c.output)
+        self.fail_ids.contains(&c.input)
+            || self.fail_ids.contains(&c.output)
+            || self.fail_backends.contains(&c.backend)
     }
 
     fn stop(&mut self, why: &str) -> Outcome {
@@ -621,6 +632,29 @@ impl Engine for FakeEngine {
 
     fn caps(&self) -> Caps {
         Caps::fake_for(&self.config.backend)
+    }
+
+    fn backends(&self) -> Vec<String> {
+        self.backends.clone()
+    }
+
+    fn backend_caps(&self, backend: &str) -> Caps {
+        if self.backends.iter().any(|b| b == backend) {
+            Caps::fake_for(backend)
+        } else {
+            Caps::default()
+        }
+    }
+
+    fn devices_for(&mut self, backend: &str) -> Result<Vec<DeviceEntry>, EngineError> {
+        if let Some(e) = &self.fail_devices {
+            return Err(e.clone());
+        }
+        Ok(self
+            .devices_by_backend
+            .get(backend)
+            .unwrap_or(&self.devices)
+            .clone())
     }
 
     fn reconfigure(&mut self, next: &Config) -> Result<Outcome, EngineError> {
@@ -709,6 +743,45 @@ impl Engine for FakeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fake_switches_backend_and_caps_follow() {
+        let mut e = FakeEngine::rig();
+        assert_eq!(e.backends(), ["wasapi", "asio", "null"]);
+        let next = Config {
+            backend: "asio".into(),
+            ..e.config().clone()
+        };
+        assert_eq!(e.reconfigure(&next).unwrap(), Outcome::Applied);
+        assert_eq!(e.config().backend, "asio");
+        assert!(e.caps().one_driver);
+        assert_eq!(e.backend_caps("wasapi"), Caps::fake_for("wasapi"));
+        assert_eq!(e.backend_caps("nosuch"), Caps::default());
+    }
+
+    #[test]
+    fn fake_rolls_back_a_failing_backend() {
+        let mut e = FakeEngine::rig();
+        e.fail_backends.insert("asio".into());
+        let next = Config {
+            backend: "asio".into(),
+            ..e.config().clone()
+        };
+        assert!(matches!(
+            e.reconfigure(&next).unwrap(),
+            Outcome::RolledBack(_)
+        ));
+        assert_eq!(e.config().backend, "null");
+    }
+
+    #[test]
+    fn fake_lists_devices_per_backend() {
+        let mut e = FakeEngine::rig();
+        e.devices_by_backend
+            .insert("asio".into(), vec![entry("a4a", "ASIO4ALL v2", 2, 2)]);
+        assert_eq!(e.devices_for("asio").unwrap().len(), 1);
+        assert_eq!(e.devices_for("wasapi").unwrap(), e.devices);
+    }
 
     #[test]
     fn fake_rig_mirrors_the_cpp_rig() {

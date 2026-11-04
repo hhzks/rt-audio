@@ -118,12 +118,20 @@ void Session::open(Backend backend, const DeviceConfig& requested) {
 
 ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
     checkOpened();
-    const DeviceConfig next = withDriverIds(backend_, requested);
+    return reconfigure(backend_, requested);
+}
+
+ReconfigureResult Session::reconfigure(Backend backend, const DeviceConfig& requested) {
+    checkOpened();
+    const Backend previous = resolveBackend(backend_);
+    backend = resolveBackend(backend);
+    const DeviceConfig next = withDriverIds(backend, requested);
     if (running_.load()) throw SessionStateError("a latency measurement is running");
     if (device_ && device_->panelOpen()) throw SessionStateError("close the driver panel first");
     stopTap();
     destroyDevice();
 
+    backend_ = backend;
     const auto e1 = tryStart(next);
     if (!e1) {
         config_ = next;
@@ -132,7 +140,8 @@ ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
         startTap();
         return ReconfigureResult::Applied;
     }
-    if (next == config_) {
+    backend_ = previous;
+    if (backend == previous && next == config_) {
         stopReason_ = message_ = "could not reopen the device: " + *e1;
         return ReconfigureResult::Stopped;
     }
@@ -150,7 +159,12 @@ ReconfigureResult Session::reconfigure(const DeviceConfig& requested) {
 
 std::vector<DeviceInfo> Session::enumerate() {
     checkOpened();
-    auto probe = make_(backend_);
+    return enumerate(backend_);
+}
+
+std::vector<DeviceInfo> Session::enumerate(Backend backend) {
+    checkOpened();
+    auto probe = make_(resolveBackend(backend));
     if (!probe) throw std::runtime_error("device factory returned no device");
     return probe->enumerate();
 }

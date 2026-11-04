@@ -234,6 +234,16 @@ unsafe extern "C" {
     ) -> i32;
     pub fn rt_session_config(s: *const RtSession, out: *mut RtConfigDesc) -> i32;
     pub fn rt_session_caps(s: *const RtSession, out: *mut RtBackendCaps) -> i32;
+    pub fn rt_session_enumerate_backend(
+        s: *mut RtSession,
+        backend: *const c_char,
+        out: *mut RtDeviceInfo,
+        cap: i32,
+        total: *mut i32,
+    ) -> i32;
+    pub fn rt_backend_count() -> i32;
+    pub fn rt_backend_key(index: i32, buf: *mut c_char, cap: usize) -> i32;
+    pub fn rt_backend_caps_for(backend: *const c_char, out: *mut RtBackendCaps) -> i32;
     pub fn rt_session_reconfigure(
         s: *mut RtSession,
         cfg: *const RtOpenConfig,
