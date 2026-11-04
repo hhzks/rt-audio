@@ -10,7 +10,7 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event;
 use rig_ui::app::{App, map_key};
 use rig_ui::model::{Engine, EngineError, PanelOutcome};
-use rig_ui::startup::{fallback_notice, startup_backends};
+use rig_ui::startup::{failure_lines, fallback_notice, startup_backends};
 use rig_ui::theme::{ColorChoice, Env, GlyphChoice, Theme, pick_colors, pick_rich};
 use rig_ui::view::{self, Fx};
 
@@ -144,7 +144,7 @@ fn run(args: &Args) -> i32 {
         return 2;
     }
     // Open the device before the alternate screen, so a failure stays visible.
-    let mut first_error: Option<EngineError> = None;
+    let mut errors: Vec<EngineError> = Vec::new();
     let mut opened = None;
     for backend in startup_backends(args.backend.as_deref(), &available_backends()) {
         let options = OpenOptions {
@@ -161,25 +161,23 @@ fn run(args: &Args) -> i32 {
                 opened = Some(e);
                 break;
             }
-            Err(e) if first_error.is_none() => first_error = Some(e),
-            Err(e) => {
-                if let Some(first) = &first_error {
-                    eprintln!("rt-rig: {first}");
-                }
-                first_error = Some(e);
-            }
+            Err(e) => errors.push(e),
         }
     }
     let Some(mut engine) = opened else {
-        let e = first_error.unwrap_or_else(|| EngineError::Internal("no backend".into()));
-        eprintln!("rt-rig: {e}");
-        return match e {
-            EngineError::Arg(_) => 2,
-            EngineError::Internal(_) => 5,
-            EngineError::Device(_) | EngineError::State(_) => 3,
+        for line in failure_lines(&errors) {
+            eprintln!("{line}");
+        }
+        return match errors.last() {
+            None => 5,
+            Some(e) => match e {
+                EngineError::Arg(_) => 2,
+                EngineError::Internal(_) => 5,
+                EngineError::Device(_) | EngineError::State(_) => 3,
+            },
         };
     };
-    let notice = first_error.map(|e| fallback_notice(&e.to_string()));
+    let notice = errors.first().map(|e| fallback_notice(e.message()));
 
     let env = Env::from_process();
     let glyphs = match args.glyphs {
