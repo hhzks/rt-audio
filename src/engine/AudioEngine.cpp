@@ -10,6 +10,7 @@
 namespace rt {
 
 void AudioEngine::prepare(double sampleRate, FrameCount maxBlockFrames, int numChannels) {
+    prepared_ = false;
     if (numChannels > kMaxChannels)
         throw std::invalid_argument("channel count exceeds kMaxChannels");
 

@@ -2,6 +2,7 @@
 #include "core/ContractHandler.h"
 #include "core/ParamInfo.h"
 #include "dsp/EffectChain.h"
+#include "engine/AudioEngine.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
@@ -10,6 +11,8 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <stdexcept>
+#include <vector>
 
 namespace {
 std::atomic<bool> g_trapArmed{false};
@@ -43,6 +46,18 @@ public:
     void reset() override {}
     void process(AudioBufferView&) noexcept override {}
     const char* name() const noexcept override { return "null"; }
+};
+
+class ThrowingEffect final : public IEffect {
+public:
+    bool throwOnPrepare = false;
+    int  processCalls   = 0;
+    void prepare(double, FrameCount, int) override {
+        if (throwOnPrepare) throw std::runtime_error("prepare failed");
+    }
+    void reset() override {}
+    void process(AudioBufferView&) noexcept override { ++processCalls; }
+    const char* name() const noexcept override { return "throwing"; }
 };
 
 bool firstPredicateContains(const char* text) {
@@ -144,3 +159,24 @@ TEST_CASE("add on a full chain is counted, then throws", "[contracts]") {
     CHECK(contracts::violationCount() == before + 1);
     CHECK(chain.size() == static_cast<std::size_t>(kMaxEffects));
 }
+
+TEST_CASE("a failed prepare leaves the engine unprepared", "[contracts]") {
+    AudioEngine engine;
+    auto fx = std::make_unique<ThrowingEffect>();
+    auto* probe = fx.get();
+    engine.chain().add(std::move(fx));
+    engine.prepare(48000.0, 16, 1);
+
+    probe->throwOnPrepare = true;
+    CHECK_THROWS_AS(engine.prepare(48000.0, 32, 2), std::runtime_error);
+
+    const auto before = contracts::violationCount();
+    probe->processCalls = 0;
+    std::vector<float> in(64, 0.5f), out(64, 1.0f);
+    engine.processInterleaved(in.data(), out.data(), 32);
+    CHECK(probe->processCalls == 0);
+    CHECK(engine.stats().xruns.load() == 1);
+    for (float v : out) CHECK(v == 0.0f);
+    CHECK(contracts::violationCount() == before);
+}
+
