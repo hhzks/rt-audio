@@ -499,6 +499,7 @@ TEST_CASE("a backend key that does not fit is an argument error", "[ffi]") {
     std::memset(small, 'x', sizeof small);
     CHECK(rt_backend_key(0, small, len) == RT_E_ARG);
     CHECK(rt_backend_key(0, small, 3) == RT_E_ARG);
+    CHECK(small[0] == 'x');
     CHECK(rt_backend_key(0, small, len + 1) == RT_OK);
     CHECK(std::string(small) == big);
 }
