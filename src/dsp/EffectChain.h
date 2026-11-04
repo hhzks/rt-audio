@@ -10,6 +10,11 @@ namespace rt {
 // whole prepared chain in via a command queue.
 class EffectChain {
 public:
+    EffectChain() = default;
+    // inplace_vector moves element by element and keeps the source's size.
+    EffectChain(EffectChain&& other) noexcept;
+    EffectChain& operator=(EffectChain&& other) noexcept;
+
     void add(std::unique_ptr<IEffect> fx)
         pre(fx != nullptr)
         pre(effects_.size() < effects_.capacity());

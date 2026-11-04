@@ -12,6 +12,7 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -58,6 +59,15 @@ public:
     void reset() override {}
     void process(AudioBufferView&) noexcept override { ++processCalls; }
     const char* name() const noexcept override { return "throwing"; }
+};
+
+class LatentEffect final : public IEffect {
+public:
+    void prepare(double, FrameCount, int) override {}
+    void reset() override {}
+    void process(AudioBufferView&) noexcept override {}
+    const char* name() const noexcept override { return "latent"; }
+    FrameCount latencyFrames() const noexcept override { return 4; }
 };
 
 bool firstPredicateContains(const char* text) {
@@ -180,3 +190,27 @@ TEST_CASE("a failed prepare leaves the engine unprepared", "[contracts]") {
     CHECK(contracts::violationCount() == before);
 }
 
+TEST_CASE("a moved-from chain is empty", "[contracts]") {
+    EffectChain a;
+    a.add(std::make_unique<LatentEffect>());
+    a.add(std::make_unique<LatentEffect>());
+
+    EffectChain b(std::move(a));
+    CHECK(b.size() == 2);
+    CHECK(b.totalLatencyFrames() == 8);
+    REQUIRE(a.size() == 0);
+    CHECK(a.totalLatencyFrames() == 0);
+
+    EffectChain c;
+    c.add(std::make_unique<NullEffect>());
+    c = std::move(b);
+    CHECK(c.size() == 2);
+    CHECK(c.totalLatencyFrames() == 8);
+    REQUIRE(b.size() == 0);
+
+    std::array<float, 8> buf{};
+    std::array<float*, kMaxChannels> ptrs{buf.data()};
+    AudioBufferView view(ptrs.data(), 1, 8);
+    b.process(view);
+    a.reset();
+}

@@ -7,6 +7,18 @@ namespace {
 
 namespace rt {
 
+EffectChain::EffectChain(EffectChain&& other) noexcept : effects_(std::move(other.effects_)) {
+    other.effects_.clear();
+}
+
+EffectChain& EffectChain::operator=(EffectChain&& other) noexcept {
+    if (this != &other) {
+        effects_ = std::move(other.effects_);
+        other.effects_.clear();
+    }
+    return *this;
+}
+
 void EffectChain::add(std::unique_ptr<IEffect> fx) {
     effects_.push_back(std::move(fx));
 }
