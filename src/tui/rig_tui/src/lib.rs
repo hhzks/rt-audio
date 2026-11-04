@@ -248,7 +248,7 @@ fn ui_loop(
                 .draw(|f| view::render(&app, theme, f))
                 .map_err(Fatal::Terminal)?;
             let result = engine.reconfigure(&cfg);
-            app.apply(result, &*engine, Instant::now())
+            app.apply(result, &mut *engine, Instant::now())
                 .map_err(Fatal::Engine)?;
         }
         let now = Instant::now();

@@ -8,7 +8,7 @@ use crate::model::{
     Config, Device, Engine, EngineError, HIST_BUCKETS, LatencySettings, Outcome, PanelOutcome,
     Snapshot, Strip,
 };
-use crate::picker::{Picker, PickerStatus};
+use crate::picker::{Field, Picker, PickerStatus};
 use crate::stats::{Stats, Status};
 use crate::taper;
 
@@ -230,7 +230,7 @@ impl App {
         }
         match msg {
             Msg::Up | Msg::Down | Msg::Coarse(_) if self.picker.is_some() => {
-                self.picker_key(msg, now);
+                self.picker_key(msg, engine, now);
             }
             Msg::StartControl
             | Msg::ToggleSelected
@@ -278,7 +278,12 @@ impl App {
             Msg::OpenPicker => self.open_picker(engine),
             Msg::ClosePicker => self.picker = None,
             Msg::Rescan => {
-                let devices = engine.devices().map_err(|e| e.to_string());
+                let selected = self.picker.as_ref().map(|p| p.edited.backend.clone());
+                let devices = match selected {
+                    Some(b) => engine.devices_for(&b),
+                    None => engine.devices(),
+                }
+                .map_err(|e| e.to_string());
                 let sources = engine.system_sources().unwrap_or_default();
                 if let Some(p) = self.picker.as_mut() {
                     p.set_devices(devices);
@@ -381,7 +386,7 @@ impl App {
     pub fn apply(
         &mut self,
         result: Result<Outcome, EngineError>,
-        engine: &dyn Engine,
+        engine: &mut dyn Engine,
         now: Instant,
     ) -> Result<(), EngineError> {
         self.now = now;
@@ -410,15 +415,27 @@ impl App {
             }
             _ => {}
         }
+        let mut reload_devices = false;
         if !retry {
             let current = engine.config().clone();
             if let Some(p) = self.picker.as_mut() {
+                if p.edited.backend != current.backend {
+                    p.set_backend_info(engine.caps(), Err(String::new()));
+                    reload_devices = true;
+                }
                 p.edited = current;
                 p.status = match outcome {
                     Outcome::Applied => PickerStatus::Applied,
                     Outcome::RolledBack(m) => PickerStatus::RolledBack(m),
                     Outcome::Stopped(_) => PickerStatus::Idle,
                 };
+            }
+        }
+        if reload_devices {
+            let backend = engine.config().backend.clone();
+            let devices = engine.devices_for(&backend).map_err(|e| e.to_string());
+            if let Some(p) = self.picker.as_mut() {
+                p.set_devices(devices);
             }
         }
         self.rebuild(engine);
@@ -519,12 +536,12 @@ impl App {
             .map_or_else(|| engine.config().clone(), |(c, _)| c.clone());
         let devices = engine.devices().map_err(|e| e.to_string());
         self.help = false;
-        let mut picker = Picker::new(config, engine.caps(), devices);
+        let mut picker = Picker::new(config, engine.caps(), devices, engine.backends());
         picker.set_sources(engine.system_sources().unwrap_or_default());
         self.picker = Some(picker);
     }
 
-    fn picker_key(&mut self, msg: Msg, now: Instant) {
+    fn picker_key(&mut self, msg: Msg, engine: &mut dyn Engine, now: Instant) {
         let Some(p) = self.picker.as_mut() else {
             return;
         };
@@ -534,6 +551,11 @@ impl App {
             Msg::Coarse(dir) => {
                 if !p.step(dir) {
                     return;
+                }
+                if p.selected() == Field::Backend {
+                    let backend = p.edited.backend.clone();
+                    let devices = engine.devices_for(&backend).map_err(|e| e.to_string());
+                    p.set_backend_info(engine.backend_caps(&backend), devices);
                 }
                 p.status = PickerStatus::Pending;
                 self.pending = Some((p.edited.clone(), now));
@@ -727,6 +749,78 @@ mod tests {
         (e, app, t0)
     }
 
+    fn asio_driver() -> Vec<crate::model::DeviceEntry> {
+        vec![crate::model::DeviceEntry {
+            id: "a4a".into(),
+            name: "ASIO4ALL v2".into(),
+            inputs: 2,
+            outputs: 2,
+            default_rate: 48000.0,
+            default_in: false,
+            default_out: false,
+        }]
+    }
+
+    fn pick_asio(app: &mut App, e: &mut FakeEngine, now: Instant) {
+        app.update(Msg::OpenPicker, e, now).unwrap();
+        app.update(Msg::Up, e, now).unwrap();
+        assert_eq!(app.picker.as_ref().unwrap().selected(), Field::Backend);
+        app.update(Msg::Coarse(-1), e, now).unwrap();
+    }
+
+    #[test]
+    fn changing_the_backend_loads_its_devices() {
+        let (mut e, mut app, t0) = setup();
+        e.devices_by_backend.insert("asio".into(), asio_driver());
+        pick_asio(&mut app, &mut e, t0);
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.edited.backend, "asio");
+        assert_eq!(p.devices, asio_driver());
+        assert!(p.caps.one_driver);
+        assert_eq!(p.status, PickerStatus::Pending);
+    }
+
+    #[test]
+    fn a_backend_switch_is_applied_after_the_pending_delay() {
+        let (mut e, mut app, t0) = setup();
+        pick_asio(&mut app, &mut e, t0);
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        assert_eq!(e.reconfigures.last().unwrap().backend, "asio");
+        assert_eq!(e.config.backend, "asio");
+        assert_eq!(app.picker.as_ref().unwrap().status, PickerStatus::Applied);
+    }
+
+    #[test]
+    fn rollback_restores_the_open_backend_in_the_picker() {
+        let (mut e, mut app, t0) = setup();
+        e.fail_backends.insert("asio".into());
+        e.devices_by_backend.insert("asio".into(), asio_driver());
+        pick_asio(&mut app, &mut e, t0);
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.edited.backend, "null");
+        assert_eq!(p.caps, crate::model::Caps::fake_for("null"));
+        assert_eq!(p.devices, e.devices);
+        assert!(matches!(&p.status, PickerStatus::RolledBack(m) if m.contains("restored")));
+    }
+
+    #[test]
+    fn rescan_lists_the_selected_backend() {
+        let (mut e, mut app, t0) = setup();
+        pick_asio(&mut app, &mut e, t0);
+        e.devices_by_backend.insert("asio".into(), asio_driver());
+        app.update(Msg::Rescan, &mut e, t0).unwrap();
+        assert_eq!(app.picker.as_ref().unwrap().devices, asio_driver());
+    }
+
+    #[test]
+    fn quit_line_shows_the_new_backend() {
+        let (mut e, mut app, t0) = setup();
+        pick_asio(&mut app, &mut e, t0);
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        assert!(app.quit_line(&e).unwrap().contains("--backend asio"));
+    }
+
     fn ingest(app: &mut App, e: &mut FakeEngine, now: Instant) {
         let snap = e.snapshot().unwrap();
         app.ingest(snap, &*e, now);
@@ -736,7 +830,7 @@ mod tests {
         match app.due(&*e, now) {
             Some(cfg) => {
                 let r = e.reconfigure(&cfg);
-                app.apply(r, &*e, now).unwrap();
+                app.apply(r, &mut *e, now).unwrap();
                 true
             }
             None => false,
