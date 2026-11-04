@@ -243,10 +243,13 @@ TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     cfg.block_frames = 128;
     CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
 
+    cfg.backend = "null";
+    CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
+
 #if defined(_WIN32)
-    cfg.backend = "wasapi";
-#else
     cfg.backend = "alsa";
+#else
+    cfg.backend = "wasapi";
 #endif
     char buf[128];
     CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_E_ARG);
@@ -430,5 +433,57 @@ TEST_CASE("the system source round-trips through the config", "[ffi]") {
     REQUIRE(rt_session_snapshot(s, &snap) == RT_OK);
     CHECK(snap.system_state >= RT_SYS_OFF);
     CHECK(snap.system_state <= RT_SYS_ERROR);
+    rt_session_destroy(s);
+}
+
+TEST_CASE("the backend list ends with null and every key has caps", "[ffi]") {
+    const int32_t n = rt_backend_count();
+    REQUIRE(n >= 1);
+    char key[32];
+    for (int32_t i = 0; i < n; ++i) {
+        REQUIRE(rt_backend_key(i, key, sizeof key) == RT_OK);
+        rt_backend_caps c{};
+        CHECK(rt_backend_caps_for(key, &c) == RT_OK);
+        CHECK(c.display_name[0] != '\0');
+    }
+    CHECK(std::string(key) == "null");
+    CHECK(rt_backend_key(n, key, sizeof key) == RT_E_ARG);
+    CHECK(rt_backend_key(-1, key, sizeof key) == RT_E_ARG);
+    CHECK(rt_backend_key(0, nullptr, sizeof key) == RT_E_ARG);
+    CHECK(rt_backend_key(0, key, 0) == RT_E_ARG);
+#if defined(_WIN32)
+    REQUIRE(rt_backend_key(0, key, sizeof key) == RT_OK);
+    CHECK(std::string(key) == "wasapi");
+#endif
+}
+
+TEST_CASE("caps of a named backend", "[ffi]") {
+    rt_backend_caps c{};
+    CHECK(rt_backend_caps_for("nosuch", &c) == RT_E_ARG);
+    CHECK(rt_backend_caps_for(nullptr, &c) == RT_E_ARG);
+    CHECK(rt_backend_caps_for("null", nullptr) == RT_E_ARG);
+#if defined(_WIN32)
+    CHECK(rt_backend_caps_for("alsa", &c) == RT_E_ARG);
+#else
+    CHECK(rt_backend_caps_for("wasapi", &c) == RT_E_ARG);
+#endif
+    REQUIRE(rt_backend_caps_for("null", &c) == RT_OK);
+    CHECK(std::string(c.display_name) == "NULL");
+    CHECK((c.flags & RT_CAP_SYSTEM_AUDIO) == kSystemAudioFlag);
+}
+
+TEST_CASE("enumerate of a named backend", "[ffi]") {
+    rt_session* s = rt_session_create();
+    rt_device_info info[4];
+    int32_t total = -1;
+    CHECK(rt_session_enumerate_backend(s, "null", info, 4, &total) == RT_E_STATE);
+    rt_open_config cfg = nullConfig();
+    REQUIRE(rt_session_open(s, &cfg) == RT_OK);
+    CHECK(rt_session_enumerate_backend(s, "null", info, 4, &total) == RT_OK);
+    CHECK(total >= 1);
+    CHECK(rt_session_enumerate_backend(s, "nosuch", info, 4, &total) == RT_E_ARG);
+    CHECK(rt_session_enumerate_backend(s, nullptr, info, 4, &total) == RT_E_ARG);
+    CHECK(rt_session_enumerate_backend(s, "null", nullptr, 4, &total) == RT_E_ARG);
+    CHECK(rt_session_enumerate_backend(nullptr, "null", info, 4, &total) == RT_E_ARG);
     rt_session_destroy(s);
 }
