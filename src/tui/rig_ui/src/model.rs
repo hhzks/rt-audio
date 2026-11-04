@@ -342,6 +342,18 @@ impl fmt::Display for EngineError {
     }
 }
 
+impl EngineError {
+    /// The text without the kind prefix, for sentences shown to the user.
+    pub fn message(&self) -> &str {
+        match self {
+            EngineError::Arg(m)
+            | EngineError::State(m)
+            | EngineError::Device(m)
+            | EngineError::Internal(m) => m,
+        }
+    }
+}
+
 impl std::error::Error for EngineError {}
 
 pub trait Engine {
@@ -743,6 +755,14 @@ impl Engine for FakeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_message_has_no_kind_prefix() {
+        let e = EngineError::Device("no ASIO driver is installed".into());
+        assert_eq!(e.message(), "no ASIO driver is installed");
+        assert_eq!(e.to_string(), "device error: no ASIO driver is installed");
+        assert_eq!(EngineError::Arg("x".into()).message(), "x");
+    }
 
     #[test]
     fn fake_switches_backend_and_caps_follow() {
