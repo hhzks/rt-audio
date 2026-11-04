@@ -490,3 +490,15 @@ TEST_CASE("enumerate of a named backend", "[ffi]") {
     CHECK(rt_session_enumerate_backend(nullptr, "null", info, 4, &total) == RT_E_ARG);
     rt_session_destroy(s);
 }
+
+TEST_CASE("a backend key that does not fit is an argument error", "[ffi]") {
+    char big[32];
+    REQUIRE(rt_backend_key(0, big, sizeof big) == RT_OK);
+    const std::size_t len = std::strlen(big);
+    char small[32];
+    std::memset(small, 'x', sizeof small);
+    CHECK(rt_backend_key(0, small, len) == RT_E_ARG);
+    CHECK(rt_backend_key(0, small, 3) == RT_E_ARG);
+    CHECK(rt_backend_key(0, small, len + 1) == RT_OK);
+    CHECK(std::string(small) == big);
+}
