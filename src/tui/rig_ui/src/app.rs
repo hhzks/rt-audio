@@ -543,9 +543,12 @@ impl App {
             .pending
             .as_ref()
             .map_or_else(|| engine.config().clone(), |(c, _)| c.clone());
-        let devices = engine.devices().map_err(|e| e.to_string());
+        let devices = engine
+            .devices_for(&config.backend)
+            .map_err(|e| e.to_string());
+        let caps = engine.backend_caps(&config.backend);
         self.help = false;
-        let mut picker = Picker::new(config, engine.caps(), devices, engine.backends());
+        let mut picker = Picker::new(config, caps, devices, engine.backends());
         picker.set_sources(engine.system_sources().unwrap_or_default());
         self.picker = Some(picker);
     }
@@ -822,6 +825,20 @@ mod tests {
         assert_eq!(p.caps, crate::model::Caps::fake_for("null"));
         assert_eq!(p.devices, e.devices);
         assert!(matches!(&p.status, PickerStatus::RolledBack(m) if m.contains("restored")));
+    }
+
+    #[test]
+    fn reopening_during_a_pending_switch_shows_the_new_backend() {
+        let (mut e, mut app, t0) = setup();
+        e.devices_by_backend.insert("asio".into(), asio_driver());
+        pick_asio(&mut app, &mut e, t0);
+        app.update(Msg::ClosePicker, &mut e, t0).unwrap();
+        app.update(Msg::OpenPicker, &mut e, t0).unwrap();
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        assert_eq!(e.config.backend, "asio");
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.caps, crate::model::Caps::fake_for("asio"));
+        assert_eq!(p.devices, asio_driver());
     }
 
     #[test]
