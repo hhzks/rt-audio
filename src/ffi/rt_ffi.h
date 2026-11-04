@@ -182,7 +182,7 @@ int32_t     rt_session_enumerate_backend(rt_session* s, const char* backend, rt_
 int32_t     rt_backend_count(void);
 int32_t     rt_backend_key(int32_t index, char* buf, size_t cap);
 int32_t     rt_backend_caps_for(const char* backend, rt_backend_caps* out);
-int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);
+int32_t     rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome);   /* cfg->backend NULL = keep the open backend */
 int32_t     rt_session_control_panel(rt_session* s, int32_t* result);
 
 int32_t     rt_session_latency_enter(rt_session* s);

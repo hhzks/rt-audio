@@ -242,6 +242,9 @@ TEST_CASE("reconfigure over the C ABI", "[ffi]") {
     cfg.backend = nullptr;
     cfg.block_frames = 128;
     CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);
+    REQUIRE(rt_session_device(s, &dev) == RT_OK);
+    CHECK(std::string(dev.backend) == "Null");
+    CHECK(dev.block_frames == 128);
 
     cfg.backend = "null";
     CHECK(rt_session_reconfigure(s, &cfg, &outcome) == RT_OK);

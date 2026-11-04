@@ -290,9 +290,10 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
         if (!backend) return RT_E_ARG;
         rt::DeviceConfig dc;
         if (const int32_t rc = toDeviceConfig(s, *cfg, dc); rc != RT_OK) return rc;
-        const rt::Backend next = rt::resolveBackend(*backend);
+        const rt::Backend next =
+            cfg->backend != nullptr ? rt::resolveBackend(*backend) : s->session.backend();
         if (!rt::backendAvailable(rt::backendKey(next))) {
-            s->lastError = std::string("backend not available: ") + cfg->backend;
+            s->lastError = std::string("backend not available: ") + std::string(rt::backendKey(next));
             return RT_E_ARG;
         }
         const rt::ReconfigureResult r = s->session.reconfigure(next, dc);
