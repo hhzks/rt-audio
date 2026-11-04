@@ -29,6 +29,8 @@ void handle_contract_violation(const std::contracts::contract_violation& v) {
 
 namespace rt::contracts {
 
+extern const char handlerLinked = 1;
+
 std::uint64_t violationCount() noexcept { return g_count.load(std::memory_order_relaxed); }
 
 bool firstViolation(Violation& out) noexcept {

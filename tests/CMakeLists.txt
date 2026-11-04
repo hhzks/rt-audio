@@ -102,6 +102,14 @@ target_link_libraries(contract_report_check PRIVATE rt_contract_handler)
 rt_set_warnings(contract_report_check)
 add_test(NAME contract_report_none COMMAND contract_report_check --none)
 set_tests_properties(contract_report_none PROPERTIES FAIL_REGULAR_EXPRESSION "contract violation")
+add_executable(no_handler_probe EXCLUDE_FROM_ALL no_handler_probe.cpp)
+target_link_libraries(no_handler_probe PRIVATE rt_dsp rt_core)
+rt_set_warnings(no_handler_probe)
+add_test(NAME contract_handler_link_required
+         COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target no_handler_probe)
+set_tests_properties(contract_handler_link_required PROPERTIES
+    PASS_REGULAR_EXPRESSION "undefined reference to [^
+]*rt::contracts::handlerLinked")
 string(TOLOWER "${CMAKE_BUILD_TYPE}" _rt_build_type)
 if(NOT _rt_build_type STREQUAL "debug")
     add_test(NAME contract_report_one COMMAND contract_report_check)

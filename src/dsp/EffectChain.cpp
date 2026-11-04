@@ -1,4 +1,9 @@
 #include "dsp/EffectChain.h"
+#include "core/ContractHandler.h"
+
+namespace {
+[[gnu::used]] const char* const kNeedsContractHandler = &rt::contracts::handlerLinked;
+} // namespace
 
 namespace rt {
 

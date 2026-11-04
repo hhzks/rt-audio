@@ -10,6 +10,9 @@ struct Violation {
     unsigned    line      = 0;
 };
 
+// Product code takes its address, so a program without rt_contract_handler fails to link.
+extern const char handlerLinked;
+
 std::uint64_t violationCount() noexcept;
 bool          firstViolation(Violation& out) noexcept;
 
