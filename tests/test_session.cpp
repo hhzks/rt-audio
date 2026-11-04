@@ -138,6 +138,15 @@ Session::DeviceMaker scripted(Script& script) {
     };
 }
 
+Session::DeviceMaker byBackend(Script& script, std::vector<Backend>& made) {
+    return [&script, &made](Backend b) -> std::unique_ptr<IAudioDevice> {
+        made.push_back(b);
+        const std::string name(1, script.next);
+        ++script.next;
+        return std::make_unique<ScriptedDevice>(script, name);
+    };
+}
+
 DeviceConfig scriptedConfig(const char* input) {
     DeviceConfig c = nullConfig();
     c.inputId = input;
@@ -251,6 +260,7 @@ struct TapScript {
     std::atomic<float> gain{-1.0f};
     SystemAudioStatus  status;
     float              peak = 0.0f;
+    Backend            lastBackend = Backend::Default;
 };
 
 class FakeTap : public ISystemAudioTap {
@@ -262,6 +272,7 @@ public:
     void start(const TapInputs& in, double, int channels, FrameCount) override {
         if (s_.throwOnStart) throw std::runtime_error("tap failed");
         channels_ = channels;
+        s_.lastBackend = in.backend;
         s_.log.push_back("start:" + in.sourceId);
     }
     void stop() noexcept override { s_.log.push_back("stop"); }
@@ -967,4 +978,86 @@ TEST_CASE("system sources come from the tap", "[session]") {
     REQUIRE(v.size() == 2);
     CHECK(v[1].id == "cable");
     CHECK(v[1].name == "CABLE Input");
+}
+
+TEST_CASE("reconfigure to another backend applies it", "[session]") {
+    Script script;
+    std::vector<Backend> made;
+    TapScript tap;
+    Session s(byBackend(script, made), fakeTap(tap));
+    s.open(Backend::Null, scriptedConfig("a"));
+    tap.log.clear();
+
+    CHECK(s.reconfigure(Backend::Wasapi, scriptedConfig("b")) == ReconfigureResult::Applied);
+    CHECK(s.backend() == Backend::Wasapi);
+    CHECK(s.config() == scriptedConfig("b"));
+    CHECK(made.back() == Backend::Wasapi);
+    CHECK(tap.log == Log{"stop", "start:"});
+    CHECK(tap.lastBackend == Backend::Wasapi);
+
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    CHECK(snap.running == 1);
+}
+
+TEST_CASE("a failed backend switch rolls back to the old backend", "[session]") {
+    Script script;
+    script.failing.insert("b");
+    std::vector<Backend> made;
+    TapScript tap;
+    Session s(byBackend(script, made), fakeTap(tap));
+    const DeviceConfig a = scriptedConfig("a");
+    s.open(Backend::Null, a);
+
+    CHECK(s.reconfigure(Backend::Wasapi, scriptedConfig("b")) == ReconfigureResult::RolledBack);
+    CHECK(s.backend() == Backend::Null);
+    CHECK(s.config() == a);
+    REQUIRE(made.size() >= 2);
+    CHECK(made[made.size() - 2] == Backend::Wasapi);
+    CHECK(made.back() == Backend::Null);
+    CHECK(s.reconfigureMessage().find("restored the previous config") != std::string::npos);
+    CHECK(tap.lastBackend == Backend::Null);
+
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    CHECK(snap.running == 1);
+}
+
+TEST_CASE("a failed switch and a failed rollback stop the session", "[session]") {
+    Script script;
+    std::vector<Backend> made;
+    Session s(byBackend(script, made));
+    s.open(Backend::Null, scriptedConfig("a"));
+    script.failing = {"a", "b"};
+
+    CHECK(s.reconfigure(Backend::Wasapi, scriptedConfig("b")) == ReconfigureResult::Stopped);
+    CHECK(s.backend() == Backend::Null);
+    CHECK(s.isOpen());
+}
+
+TEST_CASE("a switch to the same config on another backend opens it", "[session]") {
+    Script script;
+    std::vector<Backend> made;
+    Session s(byBackend(script, made));
+    const DeviceConfig a = scriptedConfig("a");
+    s.open(Backend::Null, a);
+
+    CHECK(s.reconfigure(Backend::Wasapi, a) == ReconfigureResult::Applied);
+    CHECK(s.backend() == Backend::Wasapi);
+}
+
+TEST_CASE("enumerate of another backend uses a temporary device of it", "[session]") {
+    Script script;
+    std::vector<Backend> made;
+    Session s(byBackend(script, made));
+    s.open(Backend::Null, scriptedConfig("a"));
+
+    const std::vector<DeviceInfo> list = s.enumerate(Backend::Wasapi);
+    CHECK(list.size() == 2);
+    CHECK(made.back() == Backend::Wasapi);
+    CHECK(s.backend() == Backend::Null);
+
+    rt_snapshot snap{};
+    REQUIRE(waitForCallbacks(s, snap, 3));
+    CHECK(snap.running == 1);
 }

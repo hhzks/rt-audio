@@ -64,7 +64,9 @@ public:
 
     void open(Backend backend, const DeviceConfig& config);
     ReconfigureResult reconfigure(const DeviceConfig& next);
+    ReconfigureResult reconfigure(Backend backend, const DeviceConfig& next);
     std::vector<DeviceInfo> enumerate();
+    std::vector<DeviceInfo> enumerate(Backend backend);
     void stop() noexcept;
     PanelResult controlPanel();
     bool isOpen() const noexcept { return opened_; }

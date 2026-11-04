@@ -142,6 +142,35 @@ fn latency_status_from(raw: &RtLatencyStatus) -> LatencyStatus {
     }
 }
 
+fn caps_from(c: &RtBackendCaps) -> Caps {
+    let has = |bit: u32| c.flags & bit != 0;
+    Caps {
+        ring: has(ffi::RT_CAP_RING),
+        one_driver: has(ffi::RT_CAP_ONE_DRIVER),
+        driver_panel: has(ffi::RT_CAP_DRIVER_PANEL),
+        exclusive_mode: has(ffi::RT_CAP_EXCLUSIVE_MODE),
+        rate_from_device: has(ffi::RT_CAP_RATE_FROM_DEVICE),
+        block_zero_preferred: has(ffi::RT_CAP_BLOCK_ZERO_PREFERRED),
+        block_rounded: has(ffi::RT_CAP_BLOCK_ROUNDED),
+        system_audio: has(ffi::RT_CAP_SYSTEM_AUDIO),
+        display_name: from_c_array(&c.display_name),
+        notice: from_c_array(&c.notice),
+    }
+}
+
+pub fn available_backends() -> Vec<String> {
+    // SAFETY: pure function, no arguments.
+    let n = unsafe { ffi::rt_backend_count() };
+    (0..n)
+        .filter_map(|i| {
+            let mut buf: [c_char; 32] = [0; 32];
+            // SAFETY: `buf` has `buf.len()` writable bytes; the call NUL-terminates.
+            let rc = unsafe { ffi::rt_backend_key(i, buf.as_mut_ptr(), buf.len()) };
+            (rc == ffi::RT_OK).then(|| from_c_array(&buf))
+        })
+        .collect()
+}
+
 impl FfiEngine {
     pub fn open(o: &OpenOptions) -> Result<Self, EngineError> {
         // SAFETY: plain constructor; null is checked below.
@@ -238,19 +267,7 @@ impl FfiEngine {
         let mut c = RtBackendCaps::zeroed();
         // SAFETY: `c` is a valid, writable rt_backend_caps.
         self.check(unsafe { ffi::rt_session_caps(self.s, &mut c) })?;
-        let has = |bit: u32| c.flags & bit != 0;
-        Ok(Caps {
-            ring: has(ffi::RT_CAP_RING),
-            one_driver: has(ffi::RT_CAP_ONE_DRIVER),
-            driver_panel: has(ffi::RT_CAP_DRIVER_PANEL),
-            exclusive_mode: has(ffi::RT_CAP_EXCLUSIVE_MODE),
-            rate_from_device: has(ffi::RT_CAP_RATE_FROM_DEVICE),
-            block_zero_preferred: has(ffi::RT_CAP_BLOCK_ZERO_PREFERRED),
-            block_rounded: has(ffi::RT_CAP_BLOCK_ROUNDED),
-            system_audio: has(ffi::RT_CAP_SYSTEM_AUDIO),
-            display_name: from_c_array(&c.display_name),
-            notice: from_c_array(&c.notice),
-        })
+        Ok(caps_from(&c))
     }
 
     fn read_strips(&self) -> Result<Vec<Strip>, EngineError> {
@@ -293,18 +310,18 @@ impl FfiEngine {
     }
 }
 
-type ListFn = unsafe extern "C" fn(*mut RtSession, *mut RtDeviceInfo, i32, *mut i32) -> i32;
-
 impl FfiEngine {
-    fn list(&mut self, call: ListFn) -> Result<Vec<DeviceEntry>, EngineError> {
+    fn list(
+        &mut self,
+        mut call: impl FnMut(*mut RtSession, *mut RtDeviceInfo, i32, *mut i32) -> i32,
+    ) -> Result<Vec<DeviceEntry>, EngineError> {
         let mut cap = ENUMERATE_CAP;
         loop {
             let mut buf: Vec<RtDeviceInfo> = (0..cap).map(|_| RtDeviceInfo::zeroed()).collect();
             let cap_c = i32::try_from(cap)
                 .map_err(|_| EngineError::Internal("device list too long".into()))?;
             let mut total: i32 = 0;
-            // SAFETY: `buf` has `cap` writable entries and `total` is writable.
-            self.check(unsafe { call(self.s, buf.as_mut_ptr(), cap_c, &mut total) })?;
+            self.check(call(self.s, buf.as_mut_ptr(), cap_c, &mut total))?;
             let n = usize::try_from(total).unwrap_or(0);
             if n <= cap || cap > ENUMERATE_CAP {
                 buf.truncate(n.min(cap));
@@ -315,10 +332,11 @@ impl FfiEngine {
     }
 
     fn reconfigure_device(&mut self, next: &Config) -> Result<Outcome, EngineError> {
+        let backend = c_string(non_empty(&next.backend))?;
         let input = c_string(non_empty(&next.input))?;
         let output = c_string(non_empty(&next.output))?;
         let cfg = RtOpenConfig {
-            backend: ptr::null(),
+            backend: ptr_of(backend.as_ref()),
             input_id: ptr_of(input.as_ref()),
             output_id: ptr_of(output.as_ref()),
             sample_rate: next.rate,
@@ -341,6 +359,7 @@ impl FfiEngine {
         if !matches!(result, Outcome::Stopped(_)) {
             self.device = self.read_device()?;
         }
+        self.caps = self.read_caps()?;
         Ok(result)
     }
 }
@@ -413,11 +432,39 @@ impl Engine for FfiEngine {
     }
 
     fn devices(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
-        self.list(ffi::rt_session_enumerate)
+        // SAFETY: the list loop passes a live session, `cap` writable entries and a writable total.
+        self.list(|s, out, cap, total| unsafe { ffi::rt_session_enumerate(s, out, cap, total) })
     }
 
     fn system_sources(&mut self) -> Result<Vec<DeviceEntry>, EngineError> {
-        self.list(ffi::rt_session_system_sources)
+        // SAFETY: as in `devices`.
+        self.list(|s, out, cap, total| unsafe {
+            ffi::rt_session_system_sources(s, out, cap, total)
+        })
+    }
+
+    fn backends(&self) -> Vec<String> {
+        available_backends()
+    }
+
+    fn backend_caps(&self, backend: &str) -> Caps {
+        let Ok(Some(key)) = c_string(Some(backend)) else {
+            return Caps::default();
+        };
+        let mut c = RtBackendCaps::zeroed();
+        // SAFETY: `key` is NUL-terminated and outlives the call; `c` is writable.
+        match unsafe { ffi::rt_backend_caps_for(key.as_ptr(), &mut c) } {
+            ffi::RT_OK => caps_from(&c),
+            _ => Caps::default(),
+        }
+    }
+
+    fn devices_for(&mut self, backend: &str) -> Result<Vec<DeviceEntry>, EngineError> {
+        let key = c_string(Some(backend))?.ok_or_else(|| EngineError::Arg("no backend".into()))?;
+        // SAFETY: as in `devices`; `key` outlives the list loop.
+        self.list(|s, out, cap, total| unsafe {
+            ffi::rt_session_enumerate_backend(s, key.as_ptr(), out, cap, total)
+        })
     }
 
     fn config(&self) -> &Config {

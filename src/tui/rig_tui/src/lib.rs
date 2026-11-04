@@ -10,10 +10,11 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event;
 use rig_ui::app::{App, map_key};
 use rig_ui::model::{Engine, EngineError, PanelOutcome};
+use rig_ui::startup::{fallback_notice, startup_backends};
 use rig_ui::theme::{ColorChoice, Env, GlyphChoice, Theme, pick_colors, pick_rich};
 use rig_ui::view::{self, Fx};
 
-use crate::engine::{FfiEngine, OpenOptions};
+use crate::engine::{FfiEngine, OpenOptions, available_backends};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum GlyphArg {
@@ -42,7 +43,7 @@ struct Args {
     /// wasapi | alsa | null (default: platform default)
     #[cfg_attr(
         feature = "asio",
-        arg(help = "wasapi | asio | alsa | null (default: platform default)")
+        arg(help = "wasapi | asio | alsa | null (default: asio; wasapi if asio does not open)")
     )]
     #[arg(long)]
     backend: Option<String>,
@@ -142,27 +143,43 @@ fn run(args: &Args) -> i32 {
         );
         return 2;
     }
-    let options = OpenOptions {
-        backend: args.backend.clone(),
-        input: args.input.clone(),
-        output: args.output.clone(),
-        rate: args.rate,
-        block: args.block,
-        exclusive: args.exclusive,
-        ring: args.ring,
-    };
     // Open the device before the alternate screen, so a failure stays visible.
-    let mut engine = match FfiEngine::open(&options) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("rt-rig: {e}");
-            return match e {
-                EngineError::Arg(_) => 2,
-                EngineError::Internal(_) => 5,
-                EngineError::Device(_) | EngineError::State(_) => 3,
-            };
+    let mut first_error: Option<EngineError> = None;
+    let mut opened = None;
+    for backend in startup_backends(args.backend.as_deref(), &available_backends()) {
+        let options = OpenOptions {
+            backend,
+            input: args.input.clone(),
+            output: args.output.clone(),
+            rate: args.rate,
+            block: args.block,
+            exclusive: args.exclusive,
+            ring: args.ring,
+        };
+        match FfiEngine::open(&options) {
+            Ok(e) => {
+                opened = Some(e);
+                break;
+            }
+            Err(e) if first_error.is_none() => first_error = Some(e),
+            Err(e) => {
+                if let Some(first) = &first_error {
+                    eprintln!("rt-rig: {first}");
+                }
+                first_error = Some(e);
+            }
         }
+    }
+    let Some(mut engine) = opened else {
+        let e = first_error.unwrap_or_else(|| EngineError::Internal("no backend".into()));
+        eprintln!("rt-rig: {e}");
+        return match e {
+            EngineError::Arg(_) => 2,
+            EngineError::Internal(_) => 5,
+            EngineError::Device(_) | EngineError::State(_) => 3,
+        };
     };
+    let notice = first_error.map(|e| fallback_notice(&e.to_string()));
 
     let env = Env::from_process();
     let glyphs = match args.glyphs {
@@ -185,7 +202,13 @@ fn run(args: &Args) -> i32 {
             return 4;
         }
     };
-    let result = ui_loop(&mut terminal, &mut engine, &theme, args.fps);
+    let result = ui_loop(
+        &mut terminal,
+        &mut engine,
+        &theme,
+        args.fps,
+        notice.as_deref(),
+    );
     ratatui::restore();
     if result.as_ref().is_ok_and(|exit| exit.forced) {
         std::mem::forget(engine);
@@ -217,9 +240,13 @@ fn ui_loop(
     engine: &mut FfiEngine,
     theme: &Theme,
     fps: u32,
+    notice: Option<&str>,
 ) -> Result<Exit, Fatal> {
     let frame = Duration::from_secs(1) / fps;
     let mut app = App::new(&*engine, Instant::now());
+    if let Some(text) = notice {
+        app.notice(text);
+    }
     let mut fx = Fx::default();
     let mut last = Instant::now();
     loop {
@@ -248,7 +275,7 @@ fn ui_loop(
                 .draw(|f| view::render(&app, theme, f))
                 .map_err(Fatal::Terminal)?;
             let result = engine.reconfigure(&cfg);
-            app.apply(result, &*engine, Instant::now())
+            app.apply(result, &mut *engine, Instant::now())
                 .map_err(Fatal::Engine)?;
         }
         let now = Instant::now();

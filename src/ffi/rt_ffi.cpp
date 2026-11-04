@@ -77,6 +77,48 @@ int32_t toDeviceConfig(rt_session* s, const rt_open_config& cfg, rt::DeviceConfi
     return RT_OK;
 }
 
+std::optional<rt::Backend> availableBackend(const char* name) {
+    if (name == nullptr) return std::nullopt;
+    const auto b = rt::backendFromName(name);
+    if (!b || *b == rt::Backend::Default || !rt::backendAvailable(name)) return std::nullopt;
+    return b;
+}
+
+int32_t enumerateInto(rt_session* s, std::optional<rt::Backend> backend, rt_device_info* out,
+                      int32_t cap, int32_t* total) {
+    try {
+        const std::vector<rt::DeviceInfo> list =
+            backend ? s->session.enumerate(*backend) : s->session.enumerate();
+        int32_t n = 0;
+        rt_device_info info{};
+        for (const rt::DeviceInfo& d : list) {
+            if (!rt::toDeviceInfo(d, info)) continue;
+            if (n < cap) out[n] = info;
+            ++n;
+        }
+        *total = n;
+        return RT_OK;
+    } catch (const rt::SessionStateError& e) {
+        s->lastError = e.what();
+        return RT_E_STATE;
+    } catch (const std::exception& e) {
+        s->lastError = e.what();
+        return RT_E_DEVICE;
+    } catch (...) {
+        s->lastError = "unknown exception";
+        return RT_E_DEVICE;
+    }
+}
+
+void fillCaps(rt::Backend backend, rt_backend_caps* out) {
+    const rt::BackendCaps c = rt::backendCaps(backend);
+    *out = rt_backend_caps{};
+    out->flags = rt::capsFlags(c);
+    rt::copyUtf8Truncated(out->display_name, sizeof out->display_name, c.displayName);
+    rt::copyUtf8Truncated(out->notice, sizeof out->notice, c.notice);
+}
+
+
 } // namespace
 
 extern "C" {
@@ -179,29 +221,45 @@ int32_t rt_session_snapshot(rt_session* s, rt_snapshot* out) {
     return guarded(s, [&](rt::Session& session) { session.snapshot(*out); });
 }
 
+
 int32_t rt_session_enumerate(rt_session* s, rt_device_info* out, int32_t cap, int32_t* total) {
     if (s == nullptr || total == nullptr || cap < 0 || (out == nullptr && cap > 0)) return RT_E_ARG;
-    try {
-        const std::vector<rt::DeviceInfo> list = s->session.enumerate();
-        int32_t n = 0;
-        rt_device_info info{};
-        for (const rt::DeviceInfo& d : list) {
-            if (!rt::toDeviceInfo(d, info)) continue;
-            if (n < cap) out[n] = info;
-            ++n;
-        }
-        *total = n;
-        return RT_OK;
-    } catch (const rt::SessionStateError& e) {
-        s->lastError = e.what();
-        return RT_E_STATE;
-    } catch (const std::exception& e) {
-        s->lastError = e.what();
-        return RT_E_DEVICE;
-    } catch (...) {
-        s->lastError = "unknown exception";
-        return RT_E_DEVICE;
+    return enumerateInto(s, std::nullopt, out, cap, total);
+}
+
+int32_t rt_session_enumerate_backend(rt_session* s, const char* backend, rt_device_info* out,
+                                     int32_t cap, int32_t* total) {
+    if (s == nullptr || total == nullptr || cap < 0 || (out == nullptr && cap > 0)) return RT_E_ARG;
+    const auto b = availableBackend(backend);
+    if (!b) {
+        s->lastError = std::string("backend not available: ") + (backend ? backend : "(null)");
+        return RT_E_ARG;
     }
+    return enumerateInto(s, b, out, cap, total);
+}
+
+int32_t rt_backend_count(void) {
+    return static_cast<int32_t>(rt::availableBackends().size());
+}
+
+int32_t rt_backend_key(int32_t index, char* buf, size_t cap) {
+    if (buf == nullptr || cap == 0 || index < 0) return RT_E_ARG;
+    try {
+        const auto list = rt::availableBackends();
+        if (static_cast<std::size_t>(index) >= list.size()) return RT_E_ARG;
+        rt::copyUtf8Truncated(buf, cap, list[static_cast<std::size_t>(index)]);
+        return RT_OK;
+    } catch (...) {
+        return RT_E_INTERNAL;
+    }
+}
+
+int32_t rt_backend_caps_for(const char* backend, rt_backend_caps* out) {
+    if (out == nullptr) return RT_E_ARG;
+    const auto b = availableBackend(backend);
+    if (!b) return RT_E_ARG;
+    fillCaps(*b, out);
+    return RT_OK;
 }
 
 int32_t rt_session_config(const rt_session* s, rt_config_desc* out) {
@@ -222,13 +280,7 @@ int32_t rt_session_config(const rt_session* s, rt_config_desc* out) {
 
 int32_t rt_session_caps(const rt_session* s, rt_backend_caps* out) {
     if (out == nullptr) return RT_E_ARG;
-    return guarded(s, [&](const rt::Session& session) {
-        const rt::BackendCaps c = rt::backendCaps(session.backend());
-        *out = rt_backend_caps{};
-        out->flags = rt::capsFlags(c);
-        rt::copyUtf8Truncated(out->display_name, sizeof out->display_name, c.displayName);
-        rt::copyUtf8Truncated(out->notice, sizeof out->notice, c.notice);
-    });
+    return guarded(s, [&](const rt::Session& session) { fillCaps(session.backend(), out); });
 }
 
 int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t* outcome) {
@@ -238,11 +290,13 @@ int32_t rt_session_reconfigure(rt_session* s, const rt_open_config* cfg, int32_t
         if (!backend) return RT_E_ARG;
         rt::DeviceConfig dc;
         if (const int32_t rc = toDeviceConfig(s, *cfg, dc); rc != RT_OK) return rc;
-        if (cfg->backend != nullptr && rt::resolveBackend(*backend) != s->session.backend()) {
-            s->lastError = "changing the backend is not supported";
+        const rt::Backend next =
+            cfg->backend != nullptr ? rt::resolveBackend(*backend) : s->session.backend();
+        if (!rt::backendAvailable(rt::backendKey(next))) {
+            s->lastError = std::string("backend not available: ") + std::string(rt::backendKey(next));
             return RT_E_ARG;
         }
-        const rt::ReconfigureResult r = s->session.reconfigure(dc);
+        const rt::ReconfigureResult r = s->session.reconfigure(next, dc);
         *outcome = static_cast<int32_t>(r);
         if (r == rt::ReconfigureResult::Applied) return RT_OK;
         s->lastError = s->session.reconfigureMessage();

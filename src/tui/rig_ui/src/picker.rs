@@ -6,6 +6,7 @@ pub const RINGS: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
+    Backend,
     Input,
     Output,
     Mode,
@@ -18,6 +19,7 @@ pub enum Field {
 impl Field {
     pub fn name(self) -> &'static str {
         match self {
+            Field::Backend => "backend",
             Field::Input => "input",
             Field::Output => "output",
             Field::Mode => "mode",
@@ -51,6 +53,7 @@ pub struct Picker {
     pub cursor: usize,
     pub status: PickerStatus,
     pub caps: Caps,
+    pub backends: Vec<String>,
 }
 
 pub fn khz(rate: f64) -> String {
@@ -94,7 +97,12 @@ fn step_list<T: Copy + PartialOrd>(list: &[T], current: T, dir: i8) -> T {
 }
 
 impl Picker {
-    pub fn new(config: Config, caps: Caps, devices: Result<Vec<DeviceEntry>, String>) -> Self {
+    pub fn new(
+        config: Config,
+        caps: Caps,
+        devices: Result<Vec<DeviceEntry>, String>,
+        backends: Vec<String>,
+    ) -> Self {
         let mut p = Picker {
             devices: Vec::new(),
             sources: Vec::new(),
@@ -103,9 +111,19 @@ impl Picker {
             cursor: 0,
             status: PickerStatus::Idle,
             caps,
+            backends,
         };
         p.set_devices(devices);
+        p.select(Field::Input);
         p
+    }
+
+    pub fn set_backend_info(&mut self, caps: Caps, devices: Result<Vec<DeviceEntry>, String>) {
+        if !caps.exclusive_mode {
+            self.edited.exclusive = false;
+        }
+        self.caps = caps;
+        self.set_devices(devices);
     }
 
     pub fn set_devices(&mut self, devices: Result<Vec<DeviceEntry>, String>) {
@@ -154,9 +172,9 @@ impl Picker {
 
     pub fn visible_fields(&self) -> Vec<Field> {
         let mut f = if self.caps.one_driver {
-            vec![Field::Input]
+            vec![Field::Backend, Field::Input]
         } else {
-            vec![Field::Input, Field::Output]
+            vec![Field::Backend, Field::Input, Field::Output]
         };
         if !self.caps.one_driver && self.caps.exclusive_mode {
             f.push(Field::Mode);
@@ -170,6 +188,7 @@ impl Picker {
 
     pub fn read_only(&self, field: Field) -> bool {
         match field {
+            Field::Backend => self.backends.len() < 2,
             Field::Rate => self.caps.rate_from_device,
             Field::Block => self.caps.exclusive_mode && self.edited.exclusive,
             Field::Ring => !self.caps.ring,
@@ -262,6 +281,22 @@ impl Picker {
             return false;
         }
         match field {
+            Field::Backend => {
+                let i = self
+                    .backends
+                    .iter()
+                    .position(|b| b == &self.edited.backend)
+                    .unwrap_or(0);
+                let j = step_index(i, self.backends.len(), dir);
+                if j == i || j >= self.backends.len() {
+                    return false;
+                }
+                self.edited.backend = self.backends[j].clone();
+                self.edited.input.clear();
+                self.edited.output.clear();
+                self.edited.block = 0;
+                true
+            }
             Field::Input | Field::Output => {
                 let output = field == Field::Output;
                 let list = self.choices(field);
@@ -330,6 +365,7 @@ impl Picker {
 
     pub fn label(&self, field: Field, device_rate: f64, sep: &str) -> String {
         match field {
+            Field::Backend => self.caps.display_name.clone(),
             Field::Input | Field::Output => {
                 let current = if field == Field::Output {
                     &self.edited.output
@@ -438,9 +474,78 @@ mod tests {
         list.iter().map(|c| c.id.as_str()).collect()
     }
 
+    fn backends() -> Vec<String> {
+        vec!["wasapi".into(), "asio".into(), "null".into()]
+    }
+
     fn picker(c: Config, devices: Result<Vec<DeviceEntry>, String>) -> Picker {
         let caps = Caps::fake_for(&c.backend);
-        Picker::new(c, caps, devices)
+        Picker::new(c, caps, devices, backends())
+    }
+
+    #[test]
+    fn backend_is_the_first_field_and_the_cursor_starts_on_input() {
+        let p = picker(config("wasapi"), Ok(devices()));
+        assert_eq!(p.visible_fields()[0], Field::Backend);
+        assert_eq!(p.field_name(Field::Backend), "backend");
+        assert_eq!(p.selected(), Field::Input);
+        assert_eq!(p.label(Field::Backend, 48000.0, " · "), "WASAPI");
+    }
+
+    #[test]
+    fn stepping_the_backend_resets_devices_and_block() {
+        let mut c = config("wasapi");
+        c.input = "mic".into();
+        c.output = "phones".into();
+        let mut p = picker(c, Ok(devices()));
+        p.select(Field::Backend);
+        assert!(p.step(1));
+        assert_eq!(p.edited.backend, "asio");
+        assert_eq!(p.edited.input, "");
+        assert_eq!(p.edited.output, "");
+        assert_eq!(p.edited.block, 0);
+        assert_eq!(p.edited.rate, 48000.0);
+        assert_eq!(p.edited.ring_blocks, 2.0);
+    }
+
+    #[test]
+    fn asio_info_hides_mode_and_output_and_clears_exclusive() {
+        let mut c = config("wasapi");
+        c.exclusive = true;
+        let mut p = picker(c, Ok(devices()));
+        p.select(Field::Backend);
+        assert!(p.step(1));
+        p.set_backend_info(Caps::fake_for("asio"), Ok(Vec::new()));
+        let f = p.visible_fields();
+        assert!(!f.contains(&Field::Mode));
+        assert!(!f.contains(&Field::Output));
+        assert!(!p.edited.exclusive);
+        assert!(p.devices.is_empty());
+        assert_eq!(p.selected(), Field::Backend);
+    }
+
+    #[test]
+    fn backend_stops_at_the_list_ends() {
+        let mut p = picker(config("null"), Ok(devices()));
+        p.select(Field::Backend);
+        assert!(!p.step(1));
+        let mut p = picker(config("wasapi"), Ok(devices()));
+        p.select(Field::Backend);
+        assert!(!p.step(-1));
+    }
+
+    #[test]
+    fn backend_is_read_only_with_one_entry() {
+        let c = config("null");
+        let caps = Caps::fake_for("null");
+        let mut p = Picker::new(c, caps, Ok(devices()), vec!["null".into()]);
+        assert!(p.read_only(Field::Backend));
+        p.select(Field::Backend);
+        assert!(!p.step(1));
+        let mut q = picker(config("null"), Ok(devices()));
+        assert!(!q.read_only(Field::Backend));
+        q.move_cursor(-1);
+        assert_eq!(q.selected(), Field::Backend);
     }
 
     #[test]
@@ -485,6 +590,7 @@ mod tests {
         assert_eq!(
             p.visible_fields(),
             [
+                Field::Backend,
                 Field::Input,
                 Field::Output,
                 Field::Mode,
@@ -522,6 +628,7 @@ mod tests {
         assert_eq!(
             p.visible_fields(),
             [
+                Field::Backend,
                 Field::Input,
                 Field::Output,
                 Field::Block,
@@ -609,6 +716,7 @@ mod tests {
         assert_eq!(
             p.visible_fields(),
             vec![
+                Field::Backend,
                 Field::Input,
                 Field::Block,
                 Field::Rate,
@@ -651,11 +759,12 @@ mod tests {
     fn the_rules_come_from_the_caps_and_not_the_name() {
         let mut caps = Caps::fake_for("null");
         caps.one_driver = true;
-        let p = Picker::new(config("null"), caps, Ok(devices()));
+        let p = Picker::new(config("null"), caps, Ok(devices()), backends());
         assert_eq!(p.field_name(Field::Input), "driver");
         assert_eq!(
             p.visible_fields(),
             vec![
+                Field::Backend,
                 Field::Input,
                 Field::Block,
                 Field::Rate,
