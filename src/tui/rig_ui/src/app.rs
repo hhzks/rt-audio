@@ -842,6 +842,24 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_switch_shows_and_retries_the_old_backend() {
+        let (mut e, mut app, t0) = setup();
+        e.fail_backends.insert("asio".into());
+        e.devices_by_backend.insert("asio".into(), asio_driver());
+        pick_asio(&mut app, &mut e, t0);
+        e.fail_ids.insert(String::new());
+        assert!(run_due(&mut app, &mut e, t0 + SETTLE));
+        ingest(&mut app, &mut e, t0 + SETTLE);
+        assert_eq!(app.status(), Status::Stopped);
+        let p = app.picker.as_ref().unwrap();
+        assert_eq!(p.edited.backend, "null");
+        assert_eq!(p.caps, crate::model::Caps::fake_for("null"));
+        assert_eq!(p.devices, e.devices);
+        let retry = app.due(&e, t0 + SETTLE).unwrap();
+        assert_eq!(retry.backend, "null");
+    }
+
+    #[test]
     fn rescan_lists_the_selected_backend() {
         let (mut e, mut app, t0) = setup();
         pick_asio(&mut app, &mut e, t0);

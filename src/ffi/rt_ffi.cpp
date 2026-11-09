@@ -247,7 +247,9 @@ int32_t rt_backend_key(int32_t index, char* buf, size_t cap) {
     try {
         const auto list = rt::availableBackends();
         if (static_cast<std::size_t>(index) >= list.size()) return RT_E_ARG;
-        rt::copyUtf8Truncated(buf, cap, list[static_cast<std::size_t>(index)]);
+        const std::string& key = list[static_cast<std::size_t>(index)];
+        if (key.size() >= cap) return RT_E_ARG;
+        rt::copyUtf8Truncated(buf, cap, key);
         return RT_OK;
     } catch (...) {
         return RT_E_INTERNAL;
